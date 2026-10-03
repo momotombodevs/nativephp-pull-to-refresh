@@ -1,0 +1,59 @@
+{
+    "name": "momotombo/nativephp-pull-to-refresh",
+    "version": "1.0.0",
+    "description": "Customizable animated pull-to-refresh UI component for NativePHP Mobile on iOS and Android.",
+    "namespace": "MomotomboPullToRefresh",
+    "platforms": [
+        "android",
+        "ios"
+    ],
+    "components": [
+        {
+            "type": "pull_to_refresh",
+            "element": "Momotombo\\NativePhpPullToRefresh\\Elements\\PullToRefresh",
+            "blade": "Momotombo\\NativePhpPullToRefresh\\Components\\PullToRefresh",
+            "android_renderer": "dev.momotombo.plugins.nativephp_pull_to_refresh.ui.NativePhpPullToRefreshRenderer",
+            "ios_renderer": "NativePhpPullToRefreshRenderer",
+            "self_closing": false
+        }
+    ],
+    "ios": {
+        "min_version": "18.2",
+        "dependencies": {
+            "swift_packages": [
+                {
+                    "url": "https://github.com/swhitty/SwiftDraw.git",
+                    "version": "0.28.0",
+                    "products": [
+                        "SwiftDraw"
+                    ]
+                },
+                {
+                    "url": "https://github.com/SDWebImage/SDWebImageSwiftUI.git",
+                    "version": "3.1.4",
+                    "products": [
+                        "SDWebImageSwiftUI"
+                    ]
+                },
+                {
+                    "url": "https://github.com/airbnb/lottie-spm.git",
+                    "version": "4.6.1",
+                    "products": [
+                        "Lottie"
+                    ]
+                }
+            ],
+            "pods": []
+        }
+    },
+    "android": {
+        "min_version": 26,
+        "dependencies": {
+            "implementation": [
+                "io.coil-kt.coil3:coil-svg:3.1.0",
+                "io.coil-kt.coil3:coil-gif:3.1.0",
+                "com.airbnb.android:lottie-compose:6.7.1"
+            ]
+        }
+    }
+}

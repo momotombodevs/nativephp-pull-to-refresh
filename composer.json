@@ -1,0 +1,42 @@
+{
+    "name": "momotombo/nativephp-pull-to-refresh",
+    "description": "Customizable animated pull-to-refresh UI component for NativePHP Mobile on iOS and Android.",
+    "type": "nativephp-plugin",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Momotombo"
+        }
+    ],
+    "require": {
+        "php": "^8.3",
+        "nativephp/mobile": "^4.5",
+        "nativephp/mobile-ui": "^0.6"
+    },
+    "autoload": {
+        "psr-4": {
+            "Momotombo\\NativePhpPullToRefresh\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Momotombo\\NativePhpPullToRefresh\\NativePhpPullToRefreshServiceProvider"
+            ]
+        },
+        "nativephp": {
+            "manifest": "nativephp.json"
+        }
+    },
+    "require-dev": {
+        "pestphp/pest": "^3.0"
+    },
+    "scripts": {
+        "test": "pest"
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    }
+}
