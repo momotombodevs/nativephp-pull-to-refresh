@@ -31,6 +31,14 @@ class PullToRefresh extends Element
 
     private const PRESETS = ['liquid', 'spring', 'minimal'];
     private const RESULTS = ['idle', 'success', 'error'];
+    private const ANDROID_ICONS = [
+        'refresh',
+        'sync',
+        'arrow_downward',
+        'download',
+        'cloud_download',
+        'local_shipping',
+    ];
 
     protected string $type = 'pull_to_refresh';
 
@@ -105,8 +113,8 @@ class PullToRefresh extends Element
     public function indicatorIconAndroid(string $icon): static
     {
         $icon = strtolower(trim($icon));
-        if ($icon === '') {
-            throw new InvalidArgumentException('Pull-to-refresh indicator-icon-android must name a supported Material icon.');
+        if (! in_array($icon, self::ANDROID_ICONS, true)) {
+            throw new InvalidArgumentException('Pull-to-refresh indicator-icon-android must be refresh, sync, arrow_downward, download, cloud_download, or local_shipping.');
         }
 
         $this->assertVisualSource('native-icon');

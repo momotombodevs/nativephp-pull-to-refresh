@@ -172,6 +172,11 @@ describe('pull-to-refresh element', function () {
             ]);
     });
 
+    it('rejects Android icons that the native renderer does not support', function () {
+        expect(fn () => PullToRefresh::make()->indicatorIconAndroid('archive'))
+            ->toThrow(InvalidArgumentException::class, 'indicator-icon-android must be refresh, sync');
+    });
+
     it('ignores empty optional visual attributes from conditional Blade bindings', function () {
         $element = PullToRefresh::make();
         $element->applyAttributes([

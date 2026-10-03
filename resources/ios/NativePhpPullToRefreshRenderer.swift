@@ -16,7 +16,6 @@ struct NativePhpPullToRefreshRenderer: View {
 
     @State private var pullDistance: CGFloat = 0
     @State private var lifecycle = PullToRefreshLifecycleState()
-    @State private var pendingNode: NativeUINode?
     @State private var resolvedIndicatorAssetPath: String?
     @State private var resolvedIndicatorLottiePath: String?
 
@@ -191,23 +190,18 @@ struct NativePhpPullToRefreshRenderer: View {
         }
         .onChange(of: node) { updatedNode in
             guard refreshPending,
-                  let pendingNode,
-                  lifecycle.hostUpdated(pullToRefreshHostUpdate(from: pendingNode, to: updatedNode))
+                  lifecycle.hostUpdated(pullToRefreshHostUpdate(from: node, to: updatedNode))
             else { return }
-            self.pendingNode = nil
         }
         .onChange(of: isRefreshing) { newValue in
             lifecycle.observeRefreshing(newValue)
-            if newValue {
-                pendingNode = nil
-            } else if !refreshPending {
+            if !newValue && !refreshPending {
                 pullDistance = 0
             }
         }
         .onChange(of: result) { newValue in
             lifecycle.observeResult(newValue)
             if newValue != "idle" {
-                pendingNode = nil
                 pullDistance = 0
             }
         }
@@ -273,7 +267,6 @@ struct NativePhpPullToRefreshRenderer: View {
         ) else { return false }
 
         pullDistance = 0
-        pendingNode = node
         NativeElementBridge.sendPressEvent(callbackId, nodeId: node.id)
         return true
     }
@@ -353,11 +346,8 @@ private final class PullToRefreshScrollController: UIViewController, UITableView
     private var theme = NativeUITokens.fallback
     private var refreshActionLabel = "Refresh"
     private var appIsRefreshing = false
-    private var lifecycle = PullToRefreshLifecycleState()
-    private var refreshPending: Bool { lifecycle.refreshPending }
     private var onRefresh: () -> Bool = { false }
     private var onPullDistanceChange: (CGFloat) -> Void = { _ in }
-    private var pendingNode: NativeUINode?
 
     override func loadView() {
         view = UIView()
@@ -401,18 +391,21 @@ private final class PullToRefreshScrollController: UIViewController, UITableView
         self.onPullDistanceChange = onPullDistanceChange
         self.refreshActionLabel = refreshActionLabel
 
-        let hostTreeChanged = renderedNode?.deepEquals(node) != true
-        if hostTreeChanged || renderedTheme != theme {
-            if let pendingNode,
-               lifecycle.hostUpdated(pullToRefreshHostUpdate(from: pendingNode, to: node)) {
-                self.pendingNode = nil
-            }
+        let contentChanged: Bool
+        if let renderedNode {
+            contentChanged = pullToRefreshChildrenChanged(from: renderedNode, to: node)
+        } else {
+            contentChanged = true
+        }
+
+        if contentChanged || renderedTheme != theme {
             edgeChildren = node.children
             self.theme = theme
-            renderedNode = node
-            renderedTheme = theme
             tableView.reloadData()
         }
+
+        renderedNode = node
+        renderedTheme = theme
 
         tableView.accessibilityCustomActions = node.props.getCallbackId("on_refresh") == 0 ? nil : [
             UIAccessibilityCustomAction(name: refreshActionLabel) { [weak self] _ in
@@ -423,8 +416,6 @@ private final class PullToRefreshScrollController: UIViewController, UITableView
 
         appIsRefreshing = isRefreshing
         if isRefreshing {
-            lifecycle.observeRefreshing(true)
-            pendingNode = nil
             if !refreshControl.isRefreshing {
                 refreshControl.beginRefreshing()
             }
@@ -443,8 +434,6 @@ private final class PullToRefreshScrollController: UIViewController, UITableView
         renderedNode = nil
         renderedTheme = nil
         edgeChildren = []
-        pendingNode = nil
-        lifecycle.cancelRefreshRequest()
     }
 
     /// Report top-edge overscroll to SwiftUI so custom indicators can track native pull progress.
@@ -477,29 +466,15 @@ private final class PullToRefreshScrollController: UIViewController, UITableView
 
     /// Forward UIKit's native release-to-refresh event through the PHP callback registry once.
     @objc private func didPullToRefresh() {
-        guard !appIsRefreshing, !refreshPending else {
-            refreshControl.endRefreshing()
-            return
-        }
-
-        guard lifecycle.requestRefresh(
-            callbackAvailable: true,
-            isRefreshing: appIsRefreshing,
-            visibleResult: "idle",
-            result: "idle"
-        ) else {
+        guard !appIsRefreshing else {
             refreshControl.endRefreshing()
             return
         }
 
         guard onRefresh() else {
-            lifecycle.cancelRefreshRequest()
             refreshControl.endRefreshing()
-            pendingNode = nil
             return
         }
-
-        pendingNode = renderedNode
     }
 
 }
