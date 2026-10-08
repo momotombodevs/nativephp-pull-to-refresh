@@ -3,6 +3,19 @@
     "description": "Customizable animated pull-to-refresh UI component for NativePHP Mobile on iOS and Android.",
     "type": "nativephp-plugin",
     "license": "MIT",
+    "keywords": [
+        "android",
+        "ios",
+        "laravel",
+        "nativephp",
+        "nativephp-plugin",
+        "pull-to-refresh"
+    ],
+    "homepage": "https://github.com/momotombodevs/nativephp-pull-to-refresh",
+    "support": {
+        "issues": "https://github.com/momotombodevs/nativephp-pull-to-refresh/issues",
+        "source": "https://github.com/momotombodevs/nativephp-pull-to-refresh"
+    },
     "authors": [
         {
             "name": "Momotombo"
