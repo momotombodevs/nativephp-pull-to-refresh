@@ -15,6 +15,7 @@ class PullToRefreshPhase extends Element
 
     private PhaseName $phaseName = PhaseName::Pulling;
 
+    /** Create the phase drawn while the gesture is in `$name`. */
     public static function make(PhaseName|string $name): static
     {
         $phase = new static;
@@ -23,11 +24,13 @@ class PullToRefreshPhase extends Element
         return $phase;
     }
 
+    /** Lifecycle phase this declaration draws. */
     public function name(): PhaseName
     {
         return $this->phaseName;
     }
 
+    /** Stack one visual layer; later layers draw on top. */
     public function layer(PullToRefreshLayer $layer): static
     {
         return $this->addChild($layer);
@@ -43,6 +46,11 @@ class PullToRefreshPhase extends Element
         return parent::addChild($child);
     }
 
+    /**
+     * Read the `name` attribute.
+     *
+     * @param  array<string, mixed>  $attrs
+     */
     public function applyAttributes(array $attrs): void
     {
         if (array_key_exists('name', $attrs)) {
@@ -50,17 +58,16 @@ class PullToRefreshPhase extends Element
         }
     }
 
+    /** Validate every layer; `addChild` already guarantees they are layers. */
     public function validateComposition(): void
     {
+        /** @var PullToRefreshLayer $layer */
         foreach ($this->getChildren() as $layer) {
-            if (! $layer instanceof PullToRefreshLayer) {
-                throw new InvalidArgumentException('Pull-to-refresh phase children must be layers.');
-            }
-
             $layer->validateComposition();
         }
     }
 
+    /** @return array{name: string} */
     protected function resolveProps(CallbackRegistry $registry): array
     {
         return ['name' => $this->phaseName->value];

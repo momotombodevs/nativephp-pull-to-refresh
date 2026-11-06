@@ -34,13 +34,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.ProgressBarRangeInfo
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.progressBarRangeInfo
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
@@ -65,11 +58,7 @@ internal data class PullIndicatorState(
         val indicatorSize: Dp,
         val indicatorStrokeWidth: Dp,
         val animationDurationMillis: Int,
-        val pullLabel: String,
-        val releaseLabel: String,
-        val refreshingLabel: String,
-        val successLabel: String,
-        val errorLabel: String,
+        val labels: IndicatorLabels,
         val accentColor: Color,
         val trackColor: Color,
         val successColor: Color,
@@ -86,12 +75,13 @@ internal fun PullIndicator(state: PullIndicatorState) = state.IndicatorContent()
 
 @Composable
 private fun PullIndicatorState.IndicatorContent() {
-    val imageLoader = rememberIndicatorImageLoader()
     val context = LocalContext.current
     // The gesture always drives semantics; progress-mode only changes what is drawn.
     val gestureProgress = progress.coerceIn(0f, 1f)
     val looping = isIndicatorLooping(result, isRefreshing, progressMode, gestureProgress)
-    val motionEnabled = !reduceMotion && motion != "none" && animationDurationMillis > 0
+    // Lottie and GIF playback: off for reduced motion and motion="none".
+    val animate = !reduceMotion && motion != "none"
+    val motionEnabled = animate && animationDurationMillis > 0
     val rawProgress = if (progressMode == "none") 1f else gestureProgress
     val targetProgress =
             when {
@@ -100,11 +90,10 @@ private fun PullIndicatorState.IndicatorContent() {
                 looping -> 0.84f
                 else -> rawProgress
             }
-    val progressSpec = motionSpec(motionEnabled, motion, animationDurationMillis, Spring.StiffnessLow)
     val displayedProgress by
             animateFloatAsState(
                     targetValue = targetProgress,
-                    animationSpec = progressSpec,
+                    animationSpec = motionSpec(motionEnabled, motion, animationDurationMillis, Spring.StiffnessLow),
                     label = "pull-to-refresh-progress",
             )
     val targetScale =
@@ -113,189 +102,121 @@ private fun PullIndicatorState.IndicatorContent() {
             } else {
                 1f
             }
-    val scaleSpec = motionSpec(motionEnabled, motion, animationDurationMillis, Spring.StiffnessMedium)
     val scale by
             animateFloatAsState(
                     targetValue = targetScale,
-                    animationSpec = scaleSpec,
+                    animationSpec = motionSpec(motionEnabled, motion, animationDurationMillis, Spring.StiffnessMedium),
                     label = "pull-to-refresh-scale",
             )
+    // Read only inside graphicsLayer and Canvas blocks, so each loop frame redraws without recomposing.
     val rotation =
             rememberLoopRotation(
                     active = looping && motionEnabled,
                     durationMillis = animationDurationMillis,
                     label = "pull-to-refresh-rotation",
             )
-    val breathing = if (motion == "pulse" && looping && motionEnabled) pulseScale(rotation, 0.06f) else 1f
+    val breathes = motion == "pulse" && looping && motionEnabled
     val icon = remember(androidIconName) { nativeAndroidIcon(androidIconName) }
     val gifAsset = assetFile?.extension.equals("gif", ignoreCase = true)
-    val showAsset =
-            assetFile != null &&
-                    (!gifAsset || (!reduceMotion && (isRefreshing || gestureProgress > 0f)))
-    val description =
-            when {
-                result == "success" -> successLabel
-                result == "error" -> errorLabel
-                isRefreshing -> refreshingLabel
-                gestureProgress >= 1f -> releaseLabel
-                else -> pullLabel
-            }
+    val showAsset = assetFile != null && (!gifAsset || (animate && (isRefreshing || gestureProgress > 0f)))
 
     Box(
             modifier =
                     Modifier.size(indicatorSize)
                             .graphicsLayer {
+                                val breathing = if (breathes) pulseScale(rotation.value, 0.06f) else 1f
                                 scaleX = scale * breathing
                                 scaleY = scale * breathing
                             }
-                            .semantics {
-                                contentDescription = description
-                                stateDescription =
-                                        when {
-                                            result == "success" -> "Complete"
-                                            result == "error" -> "Failed"
-                                            isRefreshing -> "In progress"
-                                            gestureProgress >= 1f -> "Ready"
-                                            gestureProgress > 0f -> "Pulling"
-                                            else -> "Idle"
-                                        }
-                                if (isRefreshing || result != "idle")
-                                        liveRegion = LiveRegionMode.Polite
-                                if (result == "idle") {
-                                    progressBarRangeInfo =
-                                            if (isRefreshing) {
-                                                ProgressBarRangeInfo.Indeterminate
-                                            } else {
-                                                ProgressBarRangeInfo(gestureProgress, 0f..1f)
-                                            }
-                                }
-                            },
+                            .refreshIndicatorSemantics(labels, gestureProgress, isRefreshing, result),
     ) {
-        when (result) {
-            "success", "error" ->
+        when {
+            result == "success" || result == "error" ->
                     Canvas(Modifier.fillMaxSize()) {
                         val diameter = min(size.width, size.height)
-                        val center = Offset(size.width / 2f, size.height / 2f)
-                        val radius = diameter * 0.42f
-                        val stroke = min(max(0.5.dp.toPx(), indicatorStrokeWidth.toPx()), diameter * 0.25f)
                         drawStatusMark(
-                                center,
-                                radius,
+                                Offset(size.width / 2f, size.height / 2f),
+                                diameter * 0.42f,
                                 if (result == "success") successColor else errorColor,
                                 result == "error",
-                                stroke
+                                indicatorStroke(indicatorStrokeWidth, diameter),
                         )
                     }
-            else ->
-                    when {
-                        lottieFile != null ->
-                                IndicatorLottie(
-                                        file = lottieFile,
-                                        progress = rawProgress,
-                                        isRefreshing = isRefreshing,
-                                        reduceMotion = reduceMotion,
-                                        modifier = Modifier.fillMaxSize(),
-                                ) {
-                                    // Static preset drawing until the Lottie file has loaded.
-                                    Canvas(Modifier.fillMaxSize()) {
-                                        val diameter = min(size.width, size.height)
-                                        drawFallbackProgress(
-                                                progressStyle = progressStyle,
-                                                preset = preset,
-                                                center = Offset(size.width / 2f, size.height / 2f),
-                                                radius = diameter * 0.42f,
-                                                progress = rawProgress,
-                                                color = accentColor,
-                                                stroke = min(max(0.5.dp.toPx(), indicatorStrokeWidth.toPx()), diameter * 0.25f),
-                                                trackColor = trackColor,
-                                                rotation = 0f,
-                                                looping = false,
-                                        )
-                                    }
-                                }
-                        showAsset -> {
-                            val model =
-                                    remember(context, assetFile) {
-                                        ImageRequest.Builder(context).data(assetFile).build()
-                                    }
-                            AsyncImage(
-                                    model = model,
-                                    imageLoader = imageLoader,
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Fit,
-                                    modifier =
-                                            Modifier.align(Alignment.Center)
-                                                    .size(indicatorSize * 0.62f),
-                            )
-                            Canvas(Modifier.fillMaxSize()) {
-                                drawCustomProgressRing(
-                                        preset = preset,
-                                        progressStyle = progressStyle,
-                                        progress = displayedProgress,
-                                        isRefreshing = looping,
-                                        rotation = rotation,
-                                        color = accentColor,
-                                        trackColor = trackColor,
-                                        strokeWidth = indicatorStrokeWidth.toPx(),
-                                )
-                            }
-                        }
-                        icon != null -> {
-                            Icon(
-                                    imageVector = icon,
-                                    contentDescription = null,
-                                    tint = accentColor,
-                                    modifier =
-                                            Modifier.align(Alignment.Center)
-                                                    .size(indicatorSize * 0.62f)
-                                                    .graphicsLayer {
-                                                        rotationZ =
-                                                                if (isRefreshing && motionEnabled)
-                                                                        rotation
-                                                                else 0f
-                                                    },
-                            )
-                            Canvas(Modifier.fillMaxSize()) {
-                                drawCustomProgressRing(
-                                        preset = preset,
-                                        progressStyle = progressStyle,
-                                        progress = displayedProgress,
-                                        isRefreshing = looping,
-                                        rotation = rotation,
-                                        color = accentColor,
-                                        trackColor = trackColor,
-                                        strokeWidth = indicatorStrokeWidth.toPx(),
-                                )
-                            }
-                        }
-                        else ->
-                                Canvas(Modifier.fillMaxSize()) {
-                                    val diameter = min(size.width, size.height)
-                                    val center = Offset(size.width / 2f, size.height / 2f)
-                                    val radius = diameter * 0.42f
-                                    val stroke =
-                                            min(
-                                                    max(0.5.dp.toPx(), indicatorStrokeWidth.toPx()),
-                                                    diameter * 0.25f,
-                                            )
-
-                                    drawFallbackProgress(
-                                            progressStyle = progressStyle,
-                                            preset = preset,
-                                            center = center,
-                                            radius = radius,
-                                            progress = displayedProgress,
-                                            color = accentColor,
-                                            stroke = stroke,
-                                            trackColor = trackColor,
-                                            rotation = rotation,
-                                            looping = looping,
-                                    )
-                                }
+            lottieFile != null ->
+                    IndicatorLottie(
+                            file = lottieFile,
+                            progress = rawProgress,
+                            isRefreshing = isRefreshing,
+                            animate = animate,
+                            modifier = Modifier.fillMaxSize(),
+                    ) {
+                        // Static preset drawing until the Lottie file has loaded.
+                        Canvas(Modifier.fillMaxSize()) { drawPreset(rawProgress, rotation = 0f, looping = false, state = this@IndicatorContent) }
                     }
+            showAsset || icon != null -> {
+                if (showAsset) {
+                    val model = remember(context, assetFile) { ImageRequest.Builder(context).data(assetFile).build() }
+                    AsyncImage(
+                            model = model,
+                            imageLoader = rememberIndicatorImageLoader(animated = animate),
+                            contentDescription = null,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.align(Alignment.Center).size(indicatorSize * 0.62f),
+                    )
+                } else if (icon != null) {
+                    Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            tint = accentColor,
+                            modifier =
+                                    Modifier.align(Alignment.Center)
+                                            .size(indicatorSize * 0.62f)
+                                            .graphicsLayer { rotationZ = if (isRefreshing) rotation.value else 0f },
+                    )
+                }
+                Canvas(Modifier.fillMaxSize()) {
+                    drawCustomProgressRing(
+                            preset = preset,
+                            progressStyle = progressStyle,
+                            progress = displayedProgress,
+                            isRefreshing = looping,
+                            rotation = rotation.value,
+                            color = accentColor,
+                            trackColor = trackColor,
+                            strokeWidth = indicatorStrokeWidth,
+                    )
+                }
+            }
+            else -> Canvas(Modifier.fillMaxSize()) { drawPreset(displayedProgress, rotation.value, looping, this@IndicatorContent) }
         }
     }
 }
+
+/** Draw this state's preset into the full canvas. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPreset(
+        progress: Float,
+        rotation: Float,
+        looping: Boolean,
+        state: PullIndicatorState,
+) {
+    val diameter = min(size.width, size.height)
+    drawFallbackProgress(
+            progressStyle = state.progressStyle,
+            preset = state.preset,
+            center = Offset(size.width / 2f, size.height / 2f),
+            radius = diameter * 0.42f,
+            progress = progress,
+            color = state.accentColor,
+            stroke = indicatorStroke(state.indicatorStrokeWidth, diameter),
+            trackColor = state.trackColor,
+            rotation = rotation,
+            looping = looping,
+    )
+}
+
+/** Stroke width clamped so it stays visible but never swallows a small indicator. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.indicatorStroke(strokeWidth: Dp, diameter: Float): Float =
+        min(max(0.5.dp.toPx(), strokeWidth.toPx()), diameter * 0.25f)
 
 /** Draw the shared progress ring used around platform icons and image assets. */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawCustomProgressRing(
@@ -306,12 +227,12 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawCustomProgressR
         rotation: Float,
         color: Color,
         trackColor: Color,
-        strokeWidth: Float,
+        strokeWidth: Dp,
 ) {
     val diameter = min(size.width, size.height)
     val center = Offset(size.width / 2f, size.height / 2f)
     val radius = diameter * 0.45f
-    val stroke = min(max(0.5.dp.toPx(), strokeWidth), diameter * 0.25f)
+    val stroke = indicatorStroke(strokeWidth, diameter)
     when (progressStyle) {
         "none" -> return
         "dots" -> {

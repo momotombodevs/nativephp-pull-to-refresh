@@ -65,6 +65,14 @@ class PullToRefresh extends Element
      */
     private static int $renderSequence = 0;
 
+    /** Visual options set through `appearance()`, the shortcut setters, or Blade. */
+    private PullToRefreshAppearance $appearance;
+
+    public function __construct()
+    {
+        $this->appearance = PullToRefreshAppearance::make();
+    }
+
     /** Create an empty pull-to-refresh EDGE element. */
     public static function make(): static
     {
@@ -82,7 +90,7 @@ class PullToRefresh extends Element
     /** Apply every visual option that was set on `$appearance`. */
     public function appearance(PullToRefreshAppearance $appearance): static
     {
-        $this->componentProps = [...$this->componentProps, ...$appearance->toArray()];
+        $this->appearance->merge($appearance);
 
         return $this;
     }
@@ -90,25 +98,33 @@ class PullToRefresh extends Element
     /** Select the silhouette of the indicator container. */
     public function shape(IndicatorShape|string $shape): static
     {
-        return $this->appearance(PullToRefreshAppearance::make()->shape($shape));
+        $this->appearance->shape($shape);
+
+        return $this;
     }
 
     /** Select how the built-in indicator draws progress. */
     public function progressStyle(ProgressStyle|string $style): static
     {
-        return $this->appearance(PullToRefreshAppearance::make()->progressStyle($style));
+        $this->appearance->progressStyle($style);
+
+        return $this;
     }
 
     /** Select the non-essential native motion treatment. */
     public function motion(Motion|string $motion): static
     {
-        return $this->appearance(PullToRefreshAppearance::make()->motion($motion));
+        $this->appearance->motion($motion);
+
+        return $this;
     }
 
     /** Decide whether progress follows the gesture, loops, or stays full. */
     public function progressMode(ProgressMode|string $mode): static
     {
-        return $this->appearance(PullToRefreshAppearance::make()->progressMode($mode));
+        $this->appearance->progressMode($mode);
+
+        return $this;
     }
 
     /** Attach one Blade/PHP-composed indicator declaration to this scroll container. */
@@ -176,7 +192,7 @@ class PullToRefresh extends Element
     public function indicatorIconIos(string $symbol): static
     {
         $this->assertVisualSource('native-icon');
-        $this->componentProps['indicator_icon_ios'] = Input::nonEmptyString($symbol, 'indicator-icon-ios');
+        $this->componentProps['indicator_icon_ios'] = Input::nonEmptyString($symbol, 'indicator-icon-ios', 'must name an SF Symbol');
 
         return $this;
     }
@@ -233,7 +249,7 @@ class PullToRefresh extends Element
     /** Set the inactive progress track color; renderers fall back to the theme when omitted. */
     public function trackColor(string|int $color): static
     {
-        $this->componentProps['track_color'] = Input::color($color, 'track-color');
+        $this->componentProps['track_color'] = Input::color($color, 'indicator-track-color');
 
         return $this;
     }
@@ -265,14 +281,20 @@ class PullToRefresh extends Element
     /** Set a parent Native Component method to invoke after an accepted refresh gesture. */
     public function onRefresh(string $method): static
     {
-        $this->componentProps['on_refresh'] = Input::nonEmptyString($method, 'on-refresh');
+        $this->componentProps['on_refresh'] = Input::nonEmptyString($method, 'on-refresh', 'must name a component method');
 
         return $this;
     }
 
     /**
      * Map Blade's kebab-case attributes to the serialized native props.
-     * Unrelated attributes are left to NativeElementCollector for layout/style handling.
+     *
+     * Optional visuals (shape, progress style, motion, progress mode, icons,
+     * assets, track color) treat blank conditional bindings as "not set", so
+     * presets and theme defaults still apply. Unrelated attributes are left to
+     * NativeElementCollector for layout and style handling.
+     *
+     * @param  array<string, mixed>  $attrs
      */
     public function applyAttributes(array $attrs): void
     {
@@ -295,8 +317,7 @@ class PullToRefresh extends Element
             }
         }
 
-        // Optional visuals: blank conditional bindings mean "not set" so presets keep their defaults.
-        $this->appearance(PullToRefreshAppearance::make()->applyAttributes($attrs));
+        $this->appearance->applyAttributes($attrs);
 
         $optionalSetters = [
             'indicator-icon-ios' => fn (mixed $value) => $this->indicatorIconIos(Input::string($value, 'indicator-icon-ios')),
@@ -318,13 +339,18 @@ class PullToRefresh extends Element
             }
         }
 
-        $refreshMethod = $attrs['on-refresh'] ?? $attrs['on_refresh'] ?? null;
-        if (Input::has(['on-refresh' => $refreshMethod], 'on-refresh')) {
-            $this->onRefresh(Input::string($refreshMethod, 'on-refresh'));
+        $refreshAttribute = array_key_exists('on-refresh', $attrs) ? 'on-refresh' : 'on_refresh';
+        if (Input::has($attrs, $refreshAttribute)) {
+            $this->onRefresh(Input::string($attrs[$refreshAttribute], 'on-refresh'));
         }
     }
 
-    /** Add stable defaults and replace the PHP method name with NativePHP's callback id. */
+    /**
+     * Merge defaults, preset visuals, and explicit props, then swap the PHP
+     * method name for NativePHP's callback id.
+     *
+     * @return array<string, string|int|float|bool>
+     */
     protected function resolveProps(CallbackRegistry $registry): array
     {
         $this->validateCustomIndicator();
@@ -336,6 +362,7 @@ class PullToRefresh extends Element
             'progress_style' => $preset->defaultProgressStyle()->value,
             'motion' => $preset->defaultMotion()->value,
             ...$this->componentProps,
+            ...$this->appearance->toArray(),
         ];
 
         if (isset($this->componentProps['on_refresh'])) {
@@ -352,15 +379,9 @@ class PullToRefresh extends Element
     private function validateCustomIndicator(): void
     {
         foreach ($this->getChildren() as $child) {
-            if ($child->getType() !== 'pull_to_refresh_indicator') {
-                continue;
+            if ($child instanceof PullToRefreshIndicator) {
+                $child->validateComposition();
             }
-
-            if (! $child instanceof PullToRefreshIndicator) {
-                throw new InvalidArgumentException('Pull-to-refresh indicator must be created by this package.');
-            }
-
-            $child->validateComposition();
         }
     }
 

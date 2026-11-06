@@ -3,12 +3,14 @@ package dev.momotombo.plugins.nativephp_pull_to_refresh.ui
 import android.animation.ValueAnimator
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshState
 import androidx.compose.material3.pulltorefresh.pullToRefresh
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
@@ -24,6 +26,7 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.nativephp.mobile.ui.nativerender.NativeElementBridge
 import com.nativephp.mobile.ui.nativerender.NativeUINode
@@ -42,19 +45,17 @@ object NativePhpPullToRefreshRenderer {
     @Composable
     fun Render(node: NativeUINode, modifier: Modifier) {
         val props = node.props
-        val preset =
-                props.getString("preset", "spring").lowercase().let {
-                    if (it in setOf("liquid", "minimal", "orbital", "wave", "pulse")) it else "spring"
-                }
+        // PHP validates every enum value, so unknown strings only fall through to defaults.
+        val preset = props.getString("preset", "spring")
         val declaredChildren = splitPullToRefreshChildren(node)
         val customIndicator = declaredChildren.indicator
-        val shape = customIndicator?.props?.getString("shape", props.getString("shape", "circle"))
-                ?: props.getString("shape", "circle")
+        /** A composed indicator may override container visuals; otherwise the container's value applies. */
+        fun indicatorProp(key: String, default: String): String =
+                props.getString(key, default).let { inherited -> customIndicator?.props?.getString(key, inherited) ?: inherited }
+        val shape = indicatorProp("shape", "circle")
         val progressStyle = props.getString("progress_style", "ring")
-        val motion = customIndicator?.props?.getString("motion", props.getString("motion", "spring"))
-                ?: props.getString("motion", "spring")
-        val progressMode = customIndicator?.props?.getString("progress_mode", props.getString("progress_mode", "scrub"))
-                ?: props.getString("progress_mode", "scrub")
+        val motion = indicatorProp("motion", "spring")
+        val progressMode = indicatorProp("progress_mode", "scrub")
         val threshold = props.getFloat("threshold", 88f).coerceAtLeast(1f).dp
         val indicatorSize = props.getFloat("indicator_size", 32f).coerceAtLeast(1f).dp
         val indicatorStrokeWidth = props.getFloat("indicator_stroke_width", 2.5f).coerceAtLeast(0.5f).dp
@@ -67,11 +68,14 @@ object NativePhpPullToRefreshRenderer {
         val resultDuration = props.getInt("result_duration", 500).coerceAtLeast(0).toLong()
         val renderSequence = props.getInt("render_sequence", 0)
         val refreshActionLabel = props.getString("refresh_action_label", "Refresh").ifBlank { "Refresh" }
-        val pullLabel = props.getString("pull_label", "Pull to refresh").ifBlank { "Pull to refresh" }
-        val releaseLabel = props.getString("release_label", "Release to refresh").ifBlank { "Release to refresh" }
-        val refreshingLabel = props.getString("refreshing_label", "Refreshing").ifBlank { "Refreshing" }
-        val successLabel = props.getString("success_label", "Refresh complete").ifBlank { "Refresh complete" }
-        val errorLabel = props.getString("error_label", "Refresh failed").ifBlank { "Refresh failed" }
+        val labels =
+                IndicatorLabels(
+                        pull = props.getString("pull_label", "Pull to refresh").ifBlank { "Pull to refresh" },
+                        release = props.getString("release_label", "Release to refresh").ifBlank { "Release to refresh" },
+                        refreshing = props.getString("refreshing_label", "Refreshing").ifBlank { "Refreshing" },
+                        success = props.getString("success_label", "Refresh complete").ifBlank { "Refresh complete" },
+                        error = props.getString("error_label", "Refresh failed").ifBlank { "Refresh failed" },
+                )
         val refreshCallback = props.getCallbackId("on_refresh")
         val theme = LocalNativeUITheme.current
         val accentColor =
@@ -161,11 +165,7 @@ object NativePhpPullToRefreshRenderer {
             indicatorSize = indicatorSize,
             indicatorStrokeWidth = indicatorStrokeWidth,
             animationDurationMillis = animationDurationMillis,
-            pullLabel = pullLabel,
-            releaseLabel = releaseLabel,
-            refreshingLabel = refreshingLabel,
-            successLabel = successLabel,
-            errorLabel = errorLabel,
+            labels = labels,
             accentColor = accentColor,
             trackColor = trackColor,
             successColor = theme.success,
@@ -175,6 +175,25 @@ object NativePhpPullToRefreshRenderer {
             assetFile = assetFile,
             lottieFile = lottieFile,
         )
+        /** The composed indicator when one is declared, otherwise the built-in preset. */
+        val indicatorContent: @Composable (Float, Boolean, String) -> Unit = { progress, isRefreshing, shownResult ->
+            if (customIndicator != null) {
+                PullToRefreshCustomIndicator(
+                        indicator = customIndicator,
+                        progress = progress,
+                        isRefreshing = isRefreshing,
+                        result = shownResult,
+                        size = indicatorSize,
+                        reduceMotion = reduceMotion,
+                        motion = motion,
+                        progressMode = progressMode,
+                        animationDurationMillis = animationDurationMillis,
+                        labels = labels,
+                )
+            } else {
+                PullIndicator(indicatorState.copy(progress = progress, isRefreshing = isRefreshing, result = shownResult))
+            }
+        }
         val requestRefresh: () -> Boolean = {
             val request = lifecycleState.value.requestRefresh(
                 callbackAvailable = refreshCallback != 0,
@@ -221,11 +240,11 @@ object NativePhpPullToRefreshRenderer {
                                 .semantics {
                                     stateDescription =
                                             when {
-                                                lifecycle.visibleResult == SUCCESS -> successLabel
-                                                lifecycle.visibleResult == ERROR -> errorLabel
-                                                busy -> refreshingLabel
-                                                pullState.distanceFraction >= 1f -> releaseLabel
-                                                else -> pullLabel
+                                                lifecycle.visibleResult == SUCCESS -> labels.success
+                                                lifecycle.visibleResult == ERROR -> labels.error
+                                                busy -> labels.refreshing
+                                                pullState.distanceFraction >= 1f -> labels.release
+                                                else -> labels.pull
                                             }
                                     customActions =
                                             if (refreshCallback == 0) {
@@ -245,71 +264,39 @@ object NativePhpPullToRefreshRenderer {
                 }
             }
 
-            PullToRefreshDefaults.IndicatorBox(
-                    modifier = Modifier.align(Alignment.TopCenter).indicatorContainerWidth(shape),
-                    state = pullState,
-                    isRefreshing = busy,
-                    maxDistance = threshold,
-                    shape = pullIndicatorShape(shape),
-                    containerColor = Color.Transparent,
-                    elevation = PullToRefreshDefaults.Elevation,
-            ) {
-                PullToRefreshSurface(shape = shape, color = containerColor, modifier = Modifier.fillMaxSize()) {
-                    if (customIndicator != null) {
-                        PullToRefreshCustomIndicator(
-                                indicator = customIndicator,
-                                progress = pullState.distanceFraction,
-                                isRefreshing = busy,
-                                result = IDLE,
-                                size = indicatorSize,
-                                reduceMotion = reduceMotion,
-                                motion = motion,
-                                progressMode = progressMode,
-                                animationDurationMillis = animationDurationMillis,
-                                modifier = Modifier.align(Alignment.Center),
-                        )
-                    } else {
-                        PullIndicator(state = indicatorState)
-                    }
-                }
+            ShapedIndicatorBox(pullState, busy, threshold, shape, indicatorSize, containerColor) {
+                indicatorContent(pullState.distanceFraction, busy, IDLE)
             }
 
             if (showResultIndicator) {
-                PullToRefreshDefaults.IndicatorBox(
-                        modifier = Modifier.align(Alignment.TopCenter).indicatorContainerWidth(shape),
-                        state = resultState,
-                        isRefreshing = true,
-                        maxDistance = threshold,
-                        shape = pullIndicatorShape(shape),
-                        containerColor = Color.Transparent,
-                        elevation = PullToRefreshDefaults.Elevation,
-                ) {
-                    PullToRefreshSurface(shape = shape, color = containerColor, modifier = Modifier.fillMaxSize()) {
-                        if (customIndicator != null) {
-                            PullToRefreshCustomIndicator(
-                                    indicator = customIndicator,
-                                    progress = 1f,
-                                    isRefreshing = false,
-                                    result = lifecycle.visibleResult,
-                                    size = indicatorSize,
-                                    reduceMotion = reduceMotion,
-                                    motion = motion,
-                                    progressMode = progressMode,
-                                    animationDurationMillis = animationDurationMillis,
-                                    modifier = Modifier.align(Alignment.Center),
-                            )
-                        } else {
-                            PullIndicator(
-                                state = indicatorState.copy(
-                                    progress = 1f,
-                                    isRefreshing = false,
-                                    result = lifecycle.visibleResult,
-                                ),
-                            )
-                        }
-                    }
+                ShapedIndicatorBox(resultState, isRefreshing = true, threshold, shape, indicatorSize, containerColor) {
+                    indicatorContent(1f, false, lifecycle.visibleResult)
                 }
             }
+        }
+    }
+
+    /** Material indicator box clipped and sized to the selected shape, filled with the container color. */
+    @Composable
+    private fun BoxScope.ShapedIndicatorBox(
+            state: PullToRefreshState,
+            isRefreshing: Boolean,
+            threshold: Dp,
+            shape: String,
+            indicatorSize: Dp,
+            containerColor: Color,
+            content: @Composable () -> Unit,
+    ) {
+        PullToRefreshDefaults.IndicatorBox(
+                modifier = Modifier.align(Alignment.TopCenter).indicatorContainerSize(shape, indicatorSize),
+                state = state,
+                isRefreshing = isRefreshing,
+                maxDistance = threshold,
+                shape = pullIndicatorShape(shape),
+                containerColor = Color.Transparent,
+                elevation = PullToRefreshDefaults.Elevation,
+        ) {
+            PullToRefreshSurface(shape = shape, color = containerColor, modifier = Modifier.fillMaxSize(), content = content)
         }
     }
 }

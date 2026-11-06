@@ -30,6 +30,7 @@ class PullToRefreshLayer extends Element
 
     private ?string $lottie = null;
 
+    /** Create a layer whose `$role` decides how it reacts to progress and motion. */
     public static function make(LayerRole|string $role): static
     {
         $layer = new static;
@@ -56,6 +57,11 @@ class PullToRefreshLayer extends Element
         return $this;
     }
 
+    /**
+     * Read `role`, `asset`, and `lottie`; blank asset bindings are ignored.
+     *
+     * @param  array<string, mixed>  $attrs
+     */
     public function applyAttributes(array $attrs): void
     {
         if (array_key_exists('role', $attrs)) {
@@ -82,6 +88,7 @@ class PullToRefreshLayer extends Element
         }
     }
 
+    /** @return array{role: string, asset?: string, lottie?: string} */
     protected function resolveProps(CallbackRegistry $registry): array
     {
         return array_filter([

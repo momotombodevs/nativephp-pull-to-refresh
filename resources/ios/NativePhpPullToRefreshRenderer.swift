@@ -23,20 +23,23 @@ struct NativePhpPullToRefreshRenderer: View {
     private var expiredResult: String { lifecycle.expiredResult }
     private var resultCycle: Int { lifecycle.resultCycle }
 
+    /// PHP validates every enum value, so unknown strings only fall through to defaults.
     private var preset: String {
-        switch node.props.getString("preset", default: "spring") {
-        case "liquid", "minimal", "orbital", "wave", "pulse": node.props.getString("preset", default: "spring")
-        default: "spring"
-        }
+        node.props.getString("preset", default: "spring")
     }
 
     private var customIndicator: NativeUINode? {
-        node.children.first { $0.type == "pull_to_refresh_indicator" }
+        node.children.first { $0.type == PullToRefreshNodeType.indicator }
+    }
+
+    /// A composed indicator may override container visuals; otherwise the container's value applies.
+    private func indicatorProp(_ key: String, default fallback: String) -> String {
+        let inherited = node.props.getString(key, default: fallback)
+        return customIndicator?.props.getString(key, default: inherited) ?? inherited
     }
 
     private var indicatorShape: String {
-        customIndicator?.props.getString("shape", default: node.props.getString("shape", default: "circle"))
-            ?? node.props.getString("shape", default: "circle")
+        indicatorProp("shape", default: "circle")
     }
 
     private var progressStyle: String {
@@ -44,13 +47,11 @@ struct NativePhpPullToRefreshRenderer: View {
     }
 
     private var indicatorMotion: String {
-        customIndicator?.props.getString("motion", default: node.props.getString("motion", default: "spring"))
-            ?? node.props.getString("motion", default: "spring")
+        indicatorProp("motion", default: "spring")
     }
 
     private var indicatorProgressMode: String {
-        customIndicator?.props.getString("progress_mode", default: node.props.getString("progress_mode", default: "scrub"))
-            ?? node.props.getString("progress_mode", default: "scrub")
+        indicatorProp("progress_mode", default: "scrub")
     }
 
     private var threshold: CGFloat {
@@ -294,10 +295,15 @@ struct NativePhpPullToRefreshRenderer: View {
         return indicatorProgress >= 1 ? releaseLabel : ""
     }
 
+    /// Matches Android's timing per motion: bouncy springs, eased `liquid`, linear `spin`.
     private var indicatorAnimation: Animation? {
-        guard !reduceMotion, animationDuration > 0, indicatorMotion != "none" else { return nil }
-        let bouncy = indicatorMotion == "spring" || indicatorMotion == "pulse"
-        return .spring(response: animationDuration, dampingFraction: bouncy ? 0.72 : 0.9)
+        guard !reduceMotion, animationDuration > 0 else { return nil }
+        switch indicatorMotion {
+        case "spring", "pulse": return .spring(response: animationDuration, dampingFraction: 0.72)
+        case "liquid": return .easeInOut(duration: animationDuration)
+        case "spin": return .linear(duration: animationDuration)
+        default: return nil
+        }
     }
 
     /// Accept a UIKit refresh request once and send its registered PHP callback.
@@ -375,7 +381,7 @@ private func pullToRefreshHostUpdate(from previous: NativeUINode, to updated: Na
 
 /// The custom indicator is an overlay declaration, never a UIKit table row.
 private func pullToRefreshContentChildren(_ node: NativeUINode) -> [NativeUINode] {
-    node.children.filter { $0.type != "pull_to_refresh_indicator" }
+    node.children.filter { $0.type != PullToRefreshNodeType.indicator }
 }
 
 /// Detect refreshed EDGE children by identity-aware structural comparison.
@@ -570,12 +576,20 @@ private struct PullToRefreshIndicator: View {
         !reduceMotion && (motion == "spring" || motion == "pulse")
     }
 
+    /// Lottie and GIF playback: off for reduced motion and `motion="none"`.
+    private var stillMedia: Bool {
+        reduceMotion || motion == "none"
+    }
+
     var body: some View {
+        // Resolved once per update, not on every animation tick below.
+        let showsSystemIcon = !iconName.isEmpty && UIImage(systemName: iconName) != nil
+
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !(looping && motionEnabled))) { context in
             let rotation = looping && motionEnabled
                 ? pullToRefreshLoopRotation(at: context.date, cycle: animationDuration)
                 : 0
-            indicator(rotation: rotation)
+            indicator(rotation: rotation, showsSystemIcon: showsSystemIcon)
                 .scaleEffect(motion == "pulse" && looping && motionEnabled ? pullToRefreshPulseScale(rotation, amplitude: 0.06) : 1)
         }
         .frame(width: size, height: size)
@@ -583,7 +597,7 @@ private struct PullToRefreshIndicator: View {
 
     /// Select result, Lottie, platform icon, asset, or built-in preset in a stable priority order.
     @ViewBuilder
-    private func indicator(rotation: Double) -> some View {
+    private func indicator(rotation: Double, showsSystemIcon: Bool) -> some View {
         if result == "success" {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: size * 0.76, weight: .semibold))
@@ -595,11 +609,11 @@ private struct PullToRefreshIndicator: View {
                 .foregroundStyle(errorColor)
                 .accessibilityHidden(true)
         } else if let lottiePath {
-            PullToRefreshLottie(path: lottiePath, progress: visualProgress, isRefreshing: isRefreshing, reduceMotion: reduceMotion) {
+            PullToRefreshLottie(path: lottiePath, progress: visualProgress, isRefreshing: isRefreshing, reduceMotion: stillMedia) {
                 presetGlyph(rotation: rotation)
             }
             .frame(width: size, height: size)
-        } else if !iconName.isEmpty, UIImage(systemName: iconName) != nil {
+        } else if showsSystemIcon {
             ZStack {
                 progressRing(rotation: rotation)
                 Image(systemName: iconName)
@@ -615,23 +629,13 @@ private struct PullToRefreshIndicator: View {
                 PullToRefreshLocalAsset(
                     path: assetPath,
                     isRefreshing: isRefreshing,
-                    reduceMotion: reduceMotion
+                    reduceMotion: stillMedia
                 )
                 .frame(width: size * 0.58, height: size * 0.58)
                 .accessibilityHidden(true)
             }
         } else {
             presetGlyph(rotation: rotation)
-        }
-    }
-
-    /// The built-in drawing, also shown while a Lottie file is still loading.
-    @ViewBuilder
-    private func presetGlyph(rotation: Double) -> some View {
-        if looping {
-            activeGlyph(rotation: rotation)
-        } else {
-            pullingGlyph
         }
     }
 
@@ -723,84 +727,88 @@ private struct PullToRefreshIndicator: View {
         min(max(0.5, strokeWidth), size * 0.25)
     }
 
-    /// Draw the selected preset's progress state before the native refresh control activates.
+    /// The built-in drawing for the current style, also shown while a Lottie file is loading.
+    /// `rotation` is 0 unless the indicator is looping with motion enabled.
     @ViewBuilder
-    private var pullingGlyph: some View {
+    private func presetGlyph(rotation: Double) -> some View {
         switch progressStyle {
         case "wave":
-            liquidGlyph(fill: visualProgress, phase: 0)
-        case "arc":
-            orbitalGlyph(rotation: 0, diameter: size * 0.82)
-        case "dots":
-            dotsGlyph(rotation: 0, diameter: size * 0.82)
-        case "none":
-            Image(systemName: "arrow.down")
-                .font(.system(size: size * 0.42, weight: .semibold))
-                .foregroundStyle(tint)
-                .rotationEffect(reduceMotion ? .zero : .degrees(progress >= 1 ? 180 : 0))
-        default:
-            if preset == "minimal" {
-                ZStack {
-                    Circle()
-                        .trim(from: 0, to: max(0.05, visualProgress))
-                        .stroke(tint, style: StrokeStyle(lineWidth: ringWidth, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .frame(width: size * 0.82, height: size * 0.82)
-                    Circle()
-                        .fill(tint)
-                        .frame(width: size * 0.1, height: size * 0.1)
-                }
-            } else {
-                ZStack {
-                    Circle().stroke(trackColor, lineWidth: ringWidth)
-                    Circle()
-                        .trim(from: 0, to: max(0.1, visualProgress))
-                        .stroke(tint, style: StrokeStyle(lineWidth: ringWidth, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                    Image(systemName: "arrow.down")
-                        .font(.system(size: size * 0.34, weight: .semibold))
-                        .foregroundStyle(tint)
-                        .rotationEffect(reduceMotion ? .zero : .degrees(progress >= 1 ? 180 : 0))
-                }
-                .frame(width: size * 0.78, height: size * 0.78)
-                .scaleEffect(bouncyMotion ? CGFloat(0.88 + min(0.16, Double(visualProgress) * 0.16)) : 1)
-            }
-        }
-    }
-
-    /// Animate the selected style while refreshing, or while pulling in `indeterminate` mode.
-    @ViewBuilder
-    private func activeGlyph(rotation: Double) -> some View {
-        switch progressStyle {
-        case "wave":
-            liquidGlyph(fill: 0.72, phase: rotation)
+            liquidGlyph(fill: looping ? 0.72 : visualProgress, phase: rotation)
         case "arc":
             orbitalGlyph(rotation: rotation, diameter: size * 0.82)
         case "dots":
             dotsGlyph(rotation: rotation, diameter: size * 0.82)
         case "none":
-            Circle()
-                .fill(tint)
-                .frame(width: size * 0.2, height: size * 0.2)
+            if looping {
+                Circle()
+                    .fill(tint)
+                    .frame(width: size * 0.2, height: size * 0.2)
+            } else {
+                Image(systemName: "arrow.down")
+                    .font(.system(size: size * 0.42, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .rotationEffect(reduceMotion ? .zero : .degrees(progress >= 1 ? 180 : 0))
+            }
         default:
             if preset == "minimal" {
+                minimalGlyph(rotation: rotation)
+            } else {
+                springGlyph(rotation: rotation)
+            }
+        }
+    }
+
+    /// Thin arc with a center dot; a spinning half arc while looping.
+    @ViewBuilder
+    private func minimalGlyph(rotation: Double) -> some View {
+        if looping {
+            Circle()
+                .trim(from: 0.08, to: 0.58)
+                .stroke(tint, style: StrokeStyle(lineWidth: ringWidth, lineCap: .round))
+                .rotationEffect(motionEnabled ? .degrees(rotation) : .degrees(-45))
+                .frame(width: size * 0.82, height: size * 0.82)
+        } else {
+            ZStack {
                 Circle()
-                    .trim(from: 0.08, to: 0.58)
+                    .trim(from: 0, to: max(0.05, visualProgress))
+                    .stroke(tint, style: StrokeStyle(lineWidth: ringWidth, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: size * 0.82, height: size * 0.82)
+                Circle()
+                    .fill(tint)
+                    .frame(width: size * 0.1, height: size * 0.1)
+            }
+        }
+    }
+
+    /// Track, progress arc, and arrow; a spinning arc around a dot while looping.
+    @ViewBuilder
+    private func springGlyph(rotation: Double) -> some View {
+        if looping {
+            ZStack {
+                Circle().stroke(trackColor, lineWidth: ringWidth)
+                Circle()
+                    .trim(from: 0.04, to: 0.72)
                     .stroke(tint, style: StrokeStyle(lineWidth: ringWidth, lineCap: .round))
                     .rotationEffect(motionEnabled ? .degrees(rotation) : .degrees(-45))
-                    .frame(width: size * 0.82, height: size * 0.82)
-            } else {
-                ZStack {
-                    Circle().stroke(trackColor, lineWidth: ringWidth)
-                    Circle()
-                        .trim(from: 0.04, to: 0.72)
-                        .stroke(tint, style: StrokeStyle(lineWidth: ringWidth, lineCap: .round))
-                        .rotationEffect(motionEnabled ? .degrees(rotation) : .degrees(-45))
-                    Circle().fill(tint).frame(width: size * 0.2, height: size * 0.2)
-                }
-                .frame(width: size * 0.78, height: size * 0.78)
-                .scaleEffect(motion == "spring" && motionEnabled ? CGFloat(1 + sin(rotation * .pi / 180) * 0.055) : 1)
+                Circle().fill(tint).frame(width: size * 0.2, height: size * 0.2)
             }
+            .frame(width: size * 0.78, height: size * 0.78)
+            .scaleEffect(motion == "spring" && motionEnabled ? CGFloat(1 + sin(rotation * .pi / 180) * 0.055) : 1)
+        } else {
+            ZStack {
+                Circle().stroke(trackColor, lineWidth: ringWidth)
+                Circle()
+                    .trim(from: 0, to: max(0.1, visualProgress))
+                    .stroke(tint, style: StrokeStyle(lineWidth: ringWidth, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Image(systemName: "arrow.down")
+                    .font(.system(size: size * 0.34, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .rotationEffect(reduceMotion ? .zero : .degrees(progress >= 1 ? 180 : 0))
+            }
+            .frame(width: size * 0.78, height: size * 0.78)
+            .scaleEffect(bouncyMotion ? CGFloat(0.88 + min(0.16, Double(visualProgress) * 0.16)) : 1)
         }
     }
 }
@@ -827,9 +835,9 @@ private struct PullToRefreshComposedIndicator: View {
 
     private var activePhase: NativeUINode? {
         indicator.children.first {
-            $0.type == "pull_to_refresh_phase" && $0.props.getString("name", default: "pulling") == activePhaseName
+            $0.type == PullToRefreshNodeType.phase && $0.props.getString("name", default: "pulling") == activePhaseName
         } ?? indicator.children.first {
-            $0.type == "pull_to_refresh_phase" && $0.props.getString("name", default: "pulling") == "pulling"
+            $0.type == PullToRefreshNodeType.phase && $0.props.getString("name", default: "pulling") == "pulling"
         }
     }
 
@@ -842,7 +850,7 @@ private struct PullToRefreshComposedIndicator: View {
     }
 
     var body: some View {
-        let layers = activePhase?.children.filter { $0.type == "pull_to_refresh_layer" } ?? []
+        let layers = activePhase?.children.filter { $0.type == PullToRefreshNodeType.layer } ?? []
         let normalizedProgress = progressMode == "none" ? 1 : min(1, max(0, progress))
 
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !animates)) { context in
@@ -909,14 +917,15 @@ private struct PullToRefreshComposedLayer: View {
     var body: some View {
         ZStack {
             if let lottiePath {
-                PullToRefreshLottie(path: lottiePath, progress: progress, isRefreshing: isRefreshing, reduceMotion: reduceMotion)
+                PullToRefreshLottie(path: lottiePath, progress: progress, isRefreshing: isRefreshing, reduceMotion: !motionEnabled)
             } else if let assetPath {
-                PullToRefreshLocalAsset(path: assetPath, isRefreshing: isRefreshing, reduceMotion: reduceMotion)
+                PullToRefreshLocalAsset(path: assetPath, isRefreshing: isRefreshing, reduceMotion: !motionEnabled)
                     .accessibilityHidden(true)
             }
 
+            // Equatable lets SwiftUI skip unchanged EDGE subtrees on every animation tick.
             ForEach(layer.children, id: \.id) { child in
-                NodeView(node: child)
+                NodeView(node: child).equatable()
             }
         }
         .opacity(role == "label" && progress == 0 && !isRefreshing ? 0 : 1)
@@ -972,6 +981,13 @@ extension PullToRefreshLottie where Placeholder == EmptyView {
 /// Refreshing always loops; `indeterminate` also loops while the finger is pulling. Results never loop.
 private func pullToRefreshIsLooping(result: String, isRefreshing: Bool, progressMode: String, progress: CGFloat) -> Bool {
     result == "idle" && (isRefreshing || (progressMode == "indeterminate" && progress > 0))
+}
+
+/// EDGE node types this plugin declares in nativephp.json.
+private enum PullToRefreshNodeType {
+    static let indicator = "pull_to_refresh_indicator"
+    static let phase = "pull_to_refresh_phase"
+    static let layer = "pull_to_refresh_layer"
 }
 
 /// Degrees of a continuous turn that restarts every `cycle` seconds, kept small for precision.

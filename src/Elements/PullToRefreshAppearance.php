@@ -61,7 +61,11 @@ final class PullToRefreshAppearance
         return $this;
     }
 
-    /** Read the kebab-case Blade attributes this object understands; blank bindings are ignored. */
+    /**
+     * Read the kebab-case Blade attributes this object understands; blank bindings are ignored.
+     *
+     * @param  array<string, mixed>  $attributes
+     */
     public function applyAttributes(array $attributes): self
     {
         foreach (['shape' => 'shape', 'progress-style' => 'progressStyle', 'motion' => 'motion', 'progress-mode' => 'progressMode'] as $attribute => $setter) {
@@ -69,6 +73,17 @@ final class PullToRefreshAppearance
                 $this->{$setter}(Input::string($attributes[$attribute], $attribute));
             }
         }
+
+        return $this;
+    }
+
+    /** Copy every option that was set on `$other`, keeping this object's values for the rest. */
+    public function merge(self $other): self
+    {
+        $this->shape = $other->shape ?? $this->shape;
+        $this->progressStyle = $other->progressStyle ?? $this->progressStyle;
+        $this->motion = $other->motion ?? $this->motion;
+        $this->progressMode = $other->progressMode ?? $this->progressMode;
 
         return $this;
     }

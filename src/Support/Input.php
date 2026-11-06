@@ -12,7 +12,11 @@ use InvalidArgumentException;
  */
 final class Input
 {
-    /** Treat absent, null, false, and blank conditional Blade bindings as "not set". */
+    /**
+     * Treat absent, null, false, and blank conditional Blade bindings as "not set".
+     *
+     * @param  array<string, mixed>  $attributes
+     */
     public static function has(array $attributes, string $name): bool
     {
         if (! array_key_exists($name, $attributes)) {
@@ -34,12 +38,16 @@ final class Input
         return $value;
     }
 
-    /** Require text that still has content after trimming, such as accessibility labels. */
-    public static function nonEmptyString(string $value, string $name): string
+    /**
+     * Require text that still has content after trimming, such as accessibility labels.
+     *
+     * @param  string  $requirement  Predicate used in the error, e.g. "must name an SF Symbol".
+     */
+    public static function nonEmptyString(string $value, string $name, string $requirement = 'cannot be empty'): string
     {
         $value = trim($value);
         if ($value === '') {
-            throw new InvalidArgumentException("Pull-to-refresh {$name} cannot be empty.");
+            throw new InvalidArgumentException("Pull-to-refresh {$name} {$requirement}.");
         }
 
         return $value;

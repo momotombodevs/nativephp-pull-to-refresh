@@ -477,12 +477,12 @@ describe('pull-to-refresh visual composition', function () {
         $node = PullToRefresh::make()
             ->preset(Preset::Orbital)
             ->shape(IndicatorShape::Blob)
-            ->indicator(PullToRefreshIndicator::make()->motion(Motion::Pulse)->phase(PullToRefreshPhase::make(PhaseName::Refreshing)))
+            ->indicator(PullToRefreshIndicator::make()->motion(Motion::Pulse)->phase(PullToRefreshPhase::make(PhaseName::Pulling)))
             ->toArray(new CallbackRegistry);
 
         expect($node['props'])->toMatchArray(['preset' => 'orbital', 'shape' => 'blob', 'progress_style' => 'arc', 'motion' => 'spin']);
         expect($node['children'][0]['props'])->toBe(['motion' => 'pulse']);
-        expect($node['children'][0]['children'][0]['props'])->toBe(['name' => 'refreshing']);
+        expect($node['children'][0]['children'][0]['props'])->toBe(['name' => 'pulling']);
     });
 
     it('validates the visual API enums and layer assets', function () {
@@ -494,5 +494,49 @@ describe('pull-to-refresh visual composition', function () {
             ->toThrow(InvalidArgumentException::class, 'relative path inside public');
         expect(fn () => PullToRefreshLayer::make('artwork')->asset('refresh/logo.png')->lottie('refresh/loading.json'))
             ->toThrow(InvalidArgumentException::class, 'one visual source');
+    });
+
+    it('rejects phases and layers placed directly in the container', function () {
+        expect(fn () => PullToRefresh::make()->addChild(PullToRefreshPhase::make('pulling')))
+            ->toThrow(InvalidArgumentException::class, 'pull_to_refresh_phase must be nested inside a pull-to-refresh-indicator');
+        expect(fn () => PullToRefresh::make()->addChild(PullToRefreshLayer::make('artwork')))
+            ->toThrow(InvalidArgumentException::class, 'pull_to_refresh_layer must be nested inside a pull-to-refresh-indicator');
+    });
+
+    it('requires a pulling phase because every omitted phase falls back to it', function () {
+        expect(fn () => PullToRefresh::make()
+            ->indicator(PullToRefreshIndicator::make()->phase(PullToRefreshPhase::make('refreshing')))
+            ->toArray(new CallbackRegistry))
+            ->toThrow(InvalidArgumentException::class, 'must define a pulling phase');
+    });
+
+    it('rejects interactive callbacks anywhere inside a layer', function () {
+        $tappable = new class extends Element
+        {
+            protected string $type = 'test_tappable';
+
+            protected function resolveProps(CallbackRegistry $registry): array
+            {
+                return ['on_change' => 42];
+            }
+        };
+        $wrapper = new class extends Element
+        {
+            protected string $type = 'test_wrapper';
+        };
+
+        expect(fn () => PullToRefresh::make()->indicator(
+            PullToRefreshIndicator::make()->phase(
+                PullToRefreshPhase::make('pulling')->layer(PullToRefreshLayer::make('artwork')->addChild($wrapper->addChild($tappable)))
+            )
+        )->toArray(new CallbackRegistry))
+            ->toThrow(InvalidArgumentException::class, 'Interactive callbacks cannot be used inside a pull-to-refresh layer');
+    });
+
+    it('keeps the v1 error messages for missing icon and refresh method names', function () {
+        expect(fn () => PullToRefresh::make()->indicatorIconIos('  '))
+            ->toThrow(InvalidArgumentException::class, 'indicator-icon-ios must name an SF Symbol');
+        expect(fn () => PullToRefresh::make()->onRefresh(''))
+            ->toThrow(InvalidArgumentException::class, 'on-refresh must name a component method');
     });
 });

@@ -11,11 +11,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -26,8 +26,16 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.max
 import coil3.ImageLoader
 import coil3.compose.AsyncImage
 import coil3.gif.AnimatedImageDecoder
@@ -44,6 +52,13 @@ import java.io.File
 import kotlin.math.PI
 import kotlin.math.sin
 
+/** EDGE node types this plugin declares in nativephp.json. */
+internal object PullToRefreshNodeType {
+    const val INDICATOR = "pull_to_refresh_indicator"
+    const val PHASE = "pull_to_refresh_phase"
+    const val LAYER = "pull_to_refresh_layer"
+}
+
 internal data class PullToRefreshChildren(
         val indicator: NativeUINode?,
         val content: List<NativeUINode>,
@@ -51,11 +66,51 @@ internal data class PullToRefreshChildren(
 
 /** Keep the declaration sentinels out of the scroll rows. */
 internal fun splitPullToRefreshChildren(node: NativeUINode): PullToRefreshChildren {
-    val indicator = node.children.firstOrNull { it.type == "pull_to_refresh_indicator" }
-    return PullToRefreshChildren(
-            indicator = indicator,
-            content = node.children.filter { it.type != "pull_to_refresh_indicator" },
-    )
+    val (indicators, content) = node.children.partition { it.type == PullToRefreshNodeType.INDICATOR }
+    return PullToRefreshChildren(indicator = indicators.firstOrNull(), content = content)
+}
+
+/** Localized announcements shared by the built-in and composed indicators. */
+internal data class IndicatorLabels(
+        val pull: String,
+        val release: String,
+        val refreshing: String,
+        val success: String,
+        val error: String,
+)
+
+/**
+ * One accessibility element for the whole indicator, whatever it draws.
+ * Clearing child semantics keeps composed EDGE layers out of TalkBack's focus order.
+ */
+internal fun Modifier.refreshIndicatorSemantics(
+        labels: IndicatorLabels,
+        progress: Float,
+        isRefreshing: Boolean,
+        result: String,
+): Modifier = clearAndSetSemantics {
+    contentDescription =
+            when {
+                result == "success" -> labels.success
+                result == "error" -> labels.error
+                isRefreshing -> labels.refreshing
+                progress >= 1f -> labels.release
+                else -> labels.pull
+            }
+    stateDescription =
+            when {
+                result == "success" -> "Complete"
+                result == "error" -> "Failed"
+                isRefreshing -> "In progress"
+                progress >= 1f -> "Ready"
+                progress > 0f -> "Pulling"
+                else -> "Idle"
+            }
+    if (isRefreshing || result != "idle") liveRegion = LiveRegionMode.Polite
+    if (result == "idle") {
+        progressBarRangeInfo =
+                if (isRefreshing) ProgressBarRangeInfo.Indeterminate else ProgressBarRangeInfo(progress, 0f..1f)
+    }
 }
 
 /** Container silhouette with radii proportional to the box, matching the iOS shapes. */
@@ -68,18 +123,22 @@ internal fun pullIndicatorShape(shape: String): Shape =
         }
 
 /**
- * Material's indicator box is a fixed 40dp square, where a capsule is just a circle.
- * Widening it first makes the capsule visible; Compose keeps the outer width constraint.
+ * Size Material's indicator box from `indicator-size` instead of its fixed 40dp,
+ * and widen it 1.6× for a capsule. Compose keeps this outer constraint over the
+ * box's own default size.
  */
-internal fun Modifier.indicatorContainerWidth(shape: String): Modifier =
-        if (shape == "capsule") width(64.dp) else this
+internal fun Modifier.indicatorContainerSize(shape: String, indicatorSize: Dp): Modifier {
+    val height = max(40.dp, indicatorSize + 8.dp)
+    return size(width = if (shape == "capsule") height * 1.6f else height, height = height)
+}
 
 /**
  * Degrees of one continuous turn that restarts every [durationMillis] while [active].
- * Returns 0 when inactive so idle indicators never schedule frames.
+ * Stays at 0 when inactive so idle indicators never schedule frames. Read the
+ * returned state inside draw or `graphicsLayer` blocks so each frame only redraws.
  */
 @Composable
-internal fun rememberLoopRotation(active: Boolean, durationMillis: Int, label: String): Float {
+internal fun rememberLoopRotation(active: Boolean, durationMillis: Int, label: String): State<Float> {
     val looping = active && durationMillis > 0
     val spec: AnimationSpec<Float> =
             if (looping) {
@@ -87,8 +146,7 @@ internal fun rememberLoopRotation(active: Boolean, durationMillis: Int, label: S
             } else {
                 snap()
             }
-    val rotation by animateFloatAsState(targetValue = if (looping) 360f else 0f, animationSpec = spec, label = label)
-    return rotation
+    return animateFloatAsState(targetValue = if (looping) 360f else 0f, animationSpec = spec, label = label)
 }
 
 /** Refreshing always loops; `indeterminate` also loops while the finger is pulling. Results never loop. */
@@ -128,33 +186,29 @@ internal fun PullToRefreshCustomIndicator(
         motion: String,
         progressMode: String,
         animationDurationMillis: Int,
+        labels: IndicatorLabels,
         modifier: Modifier = Modifier,
 ) {
-    val phaseName =
-            when {
-                result == "success" || result == "error" -> result
-                isRefreshing -> "refreshing"
-                progress >= 1f -> "release"
-                else -> "pulling"
-            }
-    // Keep the composable call ahead of the early return so its slot stays stable.
     val gestureProgress = progress.coerceIn(0f, 1f)
     val normalizedProgress = if (progressMode == "none") 1f else gestureProgress
     val looping = isIndicatorLooping(result, isRefreshing, progressMode, gestureProgress)
+    val motionEnabled = !reduceMotion && motion != "none"
+    // Keep the composable call ahead of the early return so its slot stays stable.
     val loopRotation =
             rememberLoopRotation(
-                    active = looping && !reduceMotion && motion != "none",
+                    active = looping && motionEnabled,
                     durationMillis = animationDurationMillis,
                     label = "pull-to-refresh-layer-loop",
             )
-    val phase = indicator.children.firstOrNull {
-        it.type == "pull_to_refresh_phase" && it.props.getString("name", "pulling") == phaseName
-    } ?: indicator.children.firstOrNull {
-        it.type == "pull_to_refresh_phase" && it.props.getString("name", "pulling") == "pulling"
-    } ?: return
+    val phase = activePhase(indicator, result, isRefreshing, gestureProgress) ?: return
 
-    Box(modifier = modifier.size(size), contentAlignment = Alignment.Center) {
-        phase.children.filter { it.type == "pull_to_refresh_layer" }.forEach { layer ->
+    Box(
+            modifier =
+                    modifier.size(size)
+                            .refreshIndicatorSemantics(labels, gestureProgress, isRefreshing, result),
+            contentAlignment = Alignment.Center,
+    ) {
+        phase.children.filter { it.type == PullToRefreshNodeType.LAYER }.forEach { layer ->
             PullToRefreshLayerView(
                     layer = layer,
                     progress = normalizedProgress,
@@ -163,10 +217,24 @@ internal fun PullToRefreshCustomIndicator(
                     loopRotation = loopRotation,
                     indeterminate = progressMode == "indeterminate",
                     motion = motion,
-                    reduceMotion = reduceMotion,
+                    motionEnabled = motionEnabled,
             )
         }
     }
+}
+
+/** The phase matching the lifecycle, falling back to `pulling` for phases the author left out. */
+private fun activePhase(indicator: NativeUINode, result: String, isRefreshing: Boolean, progress: Float): NativeUINode? {
+    val wanted =
+            when {
+                result == "success" || result == "error" -> result
+                isRefreshing -> "refreshing"
+                progress >= 1f -> "release"
+                else -> "pulling"
+            }
+    val phases = indicator.children.filter { it.type == PullToRefreshNodeType.PHASE }
+    return phases.firstOrNull { it.props.getString("name", "pulling") == wanted }
+            ?: phases.firstOrNull { it.props.getString("name", "pulling") == "pulling" }
 }
 
 @Composable
@@ -175,39 +243,24 @@ private fun PullToRefreshLayerView(
         progress: Float,
         isRefreshing: Boolean,
         looping: Boolean,
-        loopRotation: Float,
+        loopRotation: State<Float>,
         indeterminate: Boolean,
         motion: String,
-        reduceMotion: Boolean,
+        motionEnabled: Boolean,
 ) {
     val role = layer.props.getString("role", "artwork")
-    val motionEnabled = !reduceMotion && motion != "none"
-    val rotation =
-            when {
-                !motionEnabled -> 0f
-                role == "progress" && (looping || indeterminate) -> loopRotation
-                role == "progress" -> progress * 180f
-                role == "track" && looping -> loopRotation
-                role == "artwork" && looping && motion == "spin" -> loopRotation
-                else -> 0f
-            }
-    val scale =
-            when {
-                !motionEnabled -> 1f
-                role == "background" -> 0.82f + (progress * 0.18f)
-                role == "artwork" && motion == "pulse" && looping -> pulseScale(loopRotation)
-                role == "artwork" && (motion == "spring" || motion == "liquid") -> 0.86f + (progress * 0.14f)
-                else -> 1f
-            }
     val alpha = if (role == "label" && progress == 0f && !isRefreshing) 0f else 1f
 
     Box(
             modifier =
                     Modifier.fillMaxSize().graphicsLayer {
+                        // Reading the loop here invalidates only this layer's drawing each frame.
+                        val turn = loopRotation.value
                         this.alpha = alpha
+                        val scale = layerScale(role, motion, motionEnabled, looping, progress, turn)
                         scaleX = scale
                         scaleY = scale
-                        rotationZ = rotation
+                        rotationZ = layerRotation(role, motion, motionEnabled, looping, indeterminate, progress, turn)
                     },
             contentAlignment = Alignment.Center,
     ) {
@@ -220,49 +273,88 @@ private fun PullToRefreshLayerView(
 
         when {
             lottie.isNotBlank() && file != null ->
-                    IndicatorLottie(file, progress, isRefreshing, reduceMotion, Modifier.fillMaxSize())
-            asset.isNotBlank() && file != null -> PullToRefreshLayerAsset(file)
+                    IndicatorLottie(file, progress, isRefreshing, animate = motionEnabled, modifier = Modifier.fillMaxSize())
+            asset.isNotBlank() && file != null ->
+                    AsyncImage(
+                            model = file,
+                            imageLoader = rememberIndicatorImageLoader(animated = motionEnabled),
+                            contentDescription = null,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize(),
+                    )
         }
 
         layer.children.forEach { child -> NodeView(node = child) }
     }
 }
 
-/** Coil loader that decodes the PNG, SVG, and GIF formats the indicator accepts. */
+/** How a composed layer turns: progress scrubs or loops, track and spinning artwork loop. */
+private fun layerRotation(
+        role: String,
+        motion: String,
+        motionEnabled: Boolean,
+        looping: Boolean,
+        indeterminate: Boolean,
+        progress: Float,
+        loopRotation: Float,
+): Float =
+        when {
+            !motionEnabled -> 0f
+            role == "progress" && (looping || indeterminate) -> loopRotation
+            role == "progress" -> progress * 180f
+            role == "track" && looping -> loopRotation
+            role == "artwork" && looping && motion == "spin" -> loopRotation
+            else -> 0f
+        }
+
+/** How a composed layer scales: the background grows with the pull, artwork follows the motion. */
+private fun layerScale(
+        role: String,
+        motion: String,
+        motionEnabled: Boolean,
+        looping: Boolean,
+        progress: Float,
+        loopRotation: Float,
+): Float =
+        when {
+            !motionEnabled -> 1f
+            role == "background" -> 0.82f + (progress * 0.18f)
+            role == "artwork" && motion == "pulse" && looping -> pulseScale(loopRotation)
+            role == "artwork" && (motion == "spring" || motion == "liquid") -> 0.86f + (progress * 0.14f)
+            else -> 1f
+        }
+
+/**
+ * Coil loader for the PNG, SVG, and GIF formats the indicator accepts. With
+ * [animated] false GIFs decode as their first frame, honoring `motion="none"`
+ * and reduced motion.
+ */
 @Composable
-internal fun rememberIndicatorImageLoader(): ImageLoader {
+internal fun rememberIndicatorImageLoader(animated: Boolean): ImageLoader {
     val context = LocalContext.current
-    return remember(context) {
+    return remember(context, animated) {
         ImageLoader.Builder(context)
                 .components {
                     add(SvgDecoder.Factory())
-                    if (Build.VERSION.SDK_INT >= 28) add(AnimatedImageDecoder.Factory()) else add(GifDecoder.Factory())
+                    if (animated) {
+                        if (Build.VERSION.SDK_INT >= 28) add(AnimatedImageDecoder.Factory()) else add(GifDecoder.Factory())
+                    }
                 }
                 .build()
     }
 }
 
-@Composable
-private fun PullToRefreshLayerAsset(file: File) {
-    AsyncImage(
-            model = file,
-            imageLoader = rememberIndicatorImageLoader(),
-            contentDescription = null,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize(),
-    )
-}
-
 /**
  * Scrub a local Lottie file with pull progress, then loop it while refreshing
- * unless reduced motion is on. [placeholder] draws until the file has loaded.
+ * when [animate] allows it (false for reduced motion and `motion="none"`).
+ * [placeholder] draws until the file has loaded.
  */
 @Composable
 internal fun IndicatorLottie(
         file: File,
         progress: Float,
         isRefreshing: Boolean,
-        reduceMotion: Boolean,
+        animate: Boolean,
         modifier: Modifier = Modifier,
         placeholder: @Composable () -> Unit = {},
 ) {
@@ -270,7 +362,7 @@ internal fun IndicatorLottie(
     val animatedProgress by
             animateLottieCompositionAsState(
                     composition = composition,
-                    isPlaying = isRefreshing && !reduceMotion,
+                    isPlaying = isRefreshing && animate,
                     iterations = LottieConstants.IterateForever,
             )
 
@@ -282,7 +374,7 @@ internal fun IndicatorLottie(
                     composition = composition,
                     progress = {
                         when {
-                            isRefreshing && reduceMotion -> 1f
+                            isRefreshing && !animate -> 1f
                             isRefreshing -> animatedProgress
                             else -> progress.coerceIn(0f, 1f)
                         }
