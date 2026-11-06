@@ -6,6 +6,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-06
+
+### Changed
+
+- Composed indicators require a `pulling` phase, which every omitted phase falls back to; an indicator without one now throws instead of rendering nothing.
+- Android sizes the indicator container from `indicator-size` (minimum 40dp) instead of Material's fixed 40dp box, so large indicators no longer overflow it.
+- Android reads animation loops in the draw phase and iOS skips unchanged EDGE subtrees on each loop tick, so looping indicators no longer recompose or rebuild their content every frame.
+
+### Fixed
+
+- `motion="none"` now also stops Lottie and GIF playback on both platforms, as it already did for built-in loops.
+- iOS times indicator motion like Android: bouncy for `spring`/`pulse`, eased for `liquid`, linear for `spin`.
+- Android composed indicators expose one accessibility element with the same labels, live region, and progress as the built-in indicator, instead of exposing each layer's EDGE children.
+- The v1 messages `indicator-icon-ios must name an SF Symbol` and `on-refresh must name a component method` are restored.
+- The README now describes how each composed layer role actually reacts, and documents the cost and limits of the `render_sequence` acknowledgement.
+
 ## [1.1.0] - 2026-11-06
 
 ### Added
@@ -63,6 +79,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Package test suite passing with 13 tests and 191 assertions.
 - NativePHP plugin manifest validated without errors; the validator may report the expected informational warning that this visual-only plugin defines no `bridge_functions`.
 
-[Unreleased]: https://github.com/momotombodevs/nativephp-pull-to-refresh/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/momotombodevs/nativephp-pull-to-refresh/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/momotombodevs/nativephp-pull-to-refresh/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/momotombodevs/nativephp-pull-to-refresh/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/momotombodevs/nativephp-pull-to-refresh/releases/tag/v1.0.0

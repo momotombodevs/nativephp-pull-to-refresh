@@ -1,6 +1,6 @@
 {
     "name": "momotombo/nativephp-pull-to-refresh",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "Customizable animated pull-to-refresh UI component for NativePHP Mobile on iOS and Android.",
     "namespace": "MomotomboPullToRefresh",
     "platforms": [
