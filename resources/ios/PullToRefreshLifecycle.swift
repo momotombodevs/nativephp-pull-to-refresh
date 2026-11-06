@@ -81,8 +81,10 @@ struct PullToRefreshHostUpdate: Equatable {
     let refreshingChanged: Bool
     let resultChanged: Bool
     let childrenChanged: Bool
+    /// PHP rendered again; covers callbacks that change nothing else.
+    let renderSequenceChanged: Bool
 
     var acknowledgesCallback: Bool {
-        refreshingChanged || resultChanged || childrenChanged
+        refreshingChanged || resultChanged || childrenChanged || renderSequenceChanged
     }
 }

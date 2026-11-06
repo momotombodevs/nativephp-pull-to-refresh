@@ -1,12 +1,8 @@
 package dev.momotombo.plugins.nativephp_pull_to_refresh.ui
 
-import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.FiniteAnimationSpec
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -47,23 +43,22 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import coil3.ImageLoader
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
-import com.airbnb.lottie.compose.LottieAnimation
-import com.airbnb.lottie.compose.LottieCompositionSpec
-import com.airbnb.lottie.compose.LottieConstants
-import com.airbnb.lottie.compose.animateLottieCompositionAsState
-import com.airbnb.lottie.compose.rememberLottieComposition
 import com.nativephp.mobile.bridge.PHPBridge
 import java.io.File
 import kotlin.math.PI
+import kotlin.math.ceil
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
 internal data class PullIndicatorState(
         val preset: String,
+        val progressStyle: String,
+        val motion: String,
+        val progressMode: String,
         val progress: Float,
         val isRefreshing: Boolean,
         val result: String,
@@ -83,53 +78,29 @@ internal data class PullIndicatorState(
         val androidIconName: String,
         val assetFile: File?,
         val lottieFile: File?,
-        val imageLoader: ImageLoader,
 )
 
 /** Draw the selected preset, platform icon, local asset, or Lottie for the current refresh state. */
 @Composable
-internal fun PullIndicator(state: PullIndicatorState) {
-    val preset = state.preset
-    val progress = state.progress
-    val isRefreshing = state.isRefreshing
-    val result = state.result
-    val indicatorSize = state.indicatorSize
-    val indicatorStrokeWidth = state.indicatorStrokeWidth
-    val animationDurationMillis = state.animationDurationMillis
-    val pullLabel = state.pullLabel
-    val releaseLabel = state.releaseLabel
-    val refreshingLabel = state.refreshingLabel
-    val successLabel = state.successLabel
-    val errorLabel = state.errorLabel
-    val accentColor = state.accentColor
-    val trackColor = state.trackColor
-    val successColor = state.successColor
-    val errorColor = state.errorColor
-    val reduceMotion = state.reduceMotion
-    val androidIconName = state.androidIconName
-    val assetFile = state.assetFile
-    val lottieFile = state.lottieFile
-    val imageLoader = state.imageLoader
+internal fun PullIndicator(state: PullIndicatorState) = state.IndicatorContent()
+
+@Composable
+private fun PullIndicatorState.IndicatorContent() {
+    val imageLoader = rememberIndicatorImageLoader()
     val context = LocalContext.current
-    val rawProgress = progress.coerceIn(0f, 1f)
+    // The gesture always drives semantics; progress-mode only changes what is drawn.
+    val gestureProgress = progress.coerceIn(0f, 1f)
+    val looping = isIndicatorLooping(result, isRefreshing, progressMode, gestureProgress)
+    val motionEnabled = !reduceMotion && motion != "none" && animationDurationMillis > 0
+    val rawProgress = if (progressMode == "none") 1f else gestureProgress
     val targetProgress =
             when {
                 result != "idle" -> 1f
-                isRefreshing && preset == "liquid" -> 0.72f
-                isRefreshing -> 0.84f
+                looping && progressStyle == "wave" -> 0.72f
+                looping -> 0.84f
                 else -> rawProgress
             }
-    val progressSpec: FiniteAnimationSpec<Float> =
-            when {
-                reduceMotion || animationDurationMillis == 0 -> snap()
-                preset == "spring" ->
-                        spring(
-                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                stiffness = springStiffnessForDuration(Spring.StiffnessLow, animationDurationMillis),
-                        )
-                preset == "liquid" -> tween(durationMillis = animationDurationMillis)
-                else -> snap()
-            }
+    val progressSpec = motionSpec(motionEnabled, motion, animationDurationMillis, Spring.StiffnessLow)
     val displayedProgress by
             animateFloatAsState(
                     targetValue = targetProgress,
@@ -137,54 +108,36 @@ internal fun PullIndicator(state: PullIndicatorState) {
                     label = "pull-to-refresh-progress",
             )
     val targetScale =
-            if (preset == "spring" && result == "idle") {
+            if ((motion == "spring" || motion == "pulse") && result == "idle" && !reduceMotion) {
                 if (isRefreshing) 1.04f else 0.84f + (rawProgress * 0.16f)
             } else {
                 1f
             }
-    val scaleSpec: FiniteAnimationSpec<Float> =
-            when {
-                reduceMotion || animationDurationMillis == 0 -> snap()
-                preset == "spring" ->
-                        spring(
-                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                stiffness = springStiffnessForDuration(Spring.StiffnessMedium, animationDurationMillis),
-                        )
-                preset == "liquid" -> tween(durationMillis = animationDurationMillis)
-                else -> snap()
-            }
+    val scaleSpec = motionSpec(motionEnabled, motion, animationDurationMillis, Spring.StiffnessMedium)
     val scale by
             animateFloatAsState(
                     targetValue = targetScale,
                     animationSpec = scaleSpec,
                     label = "pull-to-refresh-scale",
             )
-    val rotationSpec: AnimationSpec<Float> =
-            if (isRefreshing && !reduceMotion && animationDurationMillis > 0) {
-                infiniteRepeatable(
-                        tween(durationMillis = animationDurationMillis, easing = LinearEasing),
-                        RepeatMode.Restart
-                )
-            } else {
-                snap()
-            }
-    val rotation by
-            animateFloatAsState(
-                    targetValue = if (isRefreshing && !reduceMotion) 360f else 0f,
-                    animationSpec = rotationSpec,
+    val rotation =
+            rememberLoopRotation(
+                    active = looping && motionEnabled,
+                    durationMillis = animationDurationMillis,
                     label = "pull-to-refresh-rotation",
             )
+    val breathing = if (motion == "pulse" && looping && motionEnabled) pulseScale(rotation, 0.06f) else 1f
     val icon = remember(androidIconName) { nativeAndroidIcon(androidIconName) }
     val gifAsset = assetFile?.extension.equals("gif", ignoreCase = true)
     val showAsset =
             assetFile != null &&
-                    (!gifAsset || (!reduceMotion && (isRefreshing || rawProgress > 0f)))
+                    (!gifAsset || (!reduceMotion && (isRefreshing || gestureProgress > 0f)))
     val description =
             when {
                 result == "success" -> successLabel
                 result == "error" -> errorLabel
                 isRefreshing -> refreshingLabel
-                rawProgress >= 1f -> releaseLabel
+                gestureProgress >= 1f -> releaseLabel
                 else -> pullLabel
             }
 
@@ -192,8 +145,8 @@ internal fun PullIndicator(state: PullIndicatorState) {
             modifier =
                     Modifier.size(indicatorSize)
                             .graphicsLayer {
-                                scaleX = scale
-                                scaleY = scale
+                                scaleX = scale * breathing
+                                scaleY = scale * breathing
                             }
                             .semantics {
                                 contentDescription = description
@@ -202,8 +155,8 @@ internal fun PullIndicator(state: PullIndicatorState) {
                                             result == "success" -> "Complete"
                                             result == "error" -> "Failed"
                                             isRefreshing -> "In progress"
-                                            rawProgress >= 1f -> "Ready"
-                                            rawProgress > 0f -> "Pulling"
+                                            gestureProgress >= 1f -> "Ready"
+                                            gestureProgress > 0f -> "Pulling"
                                             else -> "Idle"
                                         }
                                 if (isRefreshing || result != "idle")
@@ -213,7 +166,7 @@ internal fun PullIndicator(state: PullIndicatorState) {
                                             if (isRefreshing) {
                                                 ProgressBarRangeInfo.Indeterminate
                                             } else {
-                                                ProgressBarRangeInfo(rawProgress, 0f..1f)
+                                                ProgressBarRangeInfo(gestureProgress, 0f..1f)
                                             }
                                 }
                             },
@@ -236,17 +189,30 @@ internal fun PullIndicator(state: PullIndicatorState) {
             else ->
                     when {
                         lottieFile != null ->
-                                PullLottieIndicator(
+                                IndicatorLottie(
                                         file = lottieFile,
-                                        preset = preset,
                                         progress = rawProgress,
                                         isRefreshing = isRefreshing,
                                         reduceMotion = reduceMotion,
-                                        accentColor = accentColor,
-                                        trackColor = trackColor,
-                                        indicatorStrokeWidth = indicatorStrokeWidth,
                                         modifier = Modifier.fillMaxSize(),
-                                )
+                                ) {
+                                    // Static preset drawing until the Lottie file has loaded.
+                                    Canvas(Modifier.fillMaxSize()) {
+                                        val diameter = min(size.width, size.height)
+                                        drawFallbackProgress(
+                                                progressStyle = progressStyle,
+                                                preset = preset,
+                                                center = Offset(size.width / 2f, size.height / 2f),
+                                                radius = diameter * 0.42f,
+                                                progress = rawProgress,
+                                                color = accentColor,
+                                                stroke = min(max(0.5.dp.toPx(), indicatorStrokeWidth.toPx()), diameter * 0.25f),
+                                                trackColor = trackColor,
+                                                rotation = 0f,
+                                                looping = false,
+                                        )
+                                    }
+                                }
                         showAsset -> {
                             val model =
                                     remember(context, assetFile) {
@@ -264,8 +230,9 @@ internal fun PullIndicator(state: PullIndicatorState) {
                             Canvas(Modifier.fillMaxSize()) {
                                 drawCustomProgressRing(
                                         preset = preset,
+                                        progressStyle = progressStyle,
                                         progress = displayedProgress,
-                                        isRefreshing = isRefreshing,
+                                        isRefreshing = looping,
                                         rotation = rotation,
                                         color = accentColor,
                                         trackColor = trackColor,
@@ -283,7 +250,7 @@ internal fun PullIndicator(state: PullIndicatorState) {
                                                     .size(indicatorSize * 0.62f)
                                                     .graphicsLayer {
                                                         rotationZ =
-                                                                if (isRefreshing && !reduceMotion)
+                                                                if (isRefreshing && motionEnabled)
                                                                         rotation
                                                                 else 0f
                                                     },
@@ -291,8 +258,9 @@ internal fun PullIndicator(state: PullIndicatorState) {
                             Canvas(Modifier.fillMaxSize()) {
                                 drawCustomProgressRing(
                                         preset = preset,
+                                        progressStyle = progressStyle,
                                         progress = displayedProgress,
-                                        isRefreshing = isRefreshing,
+                                        isRefreshing = looping,
                                         rotation = rotation,
                                         color = accentColor,
                                         trackColor = trackColor,
@@ -311,89 +279,20 @@ internal fun PullIndicator(state: PullIndicatorState) {
                                                     diameter * 0.25f,
                                             )
 
-                                    when (preset) {
-                                        "liquid" ->
-                                                drawLiquidProgress(
-                                                        center,
-                                                        radius,
-                                                        displayedProgress,
-                                                        accentColor,
-                                                        stroke,
-                                                        trackColor
-                                                )
-                                        "minimal" ->
-                                                drawMinimalProgress(
-                                                        center = center,
-                                                        radius = radius,
-                                                        progress = displayedProgress,
-                                                        color = accentColor,
-                                                        stroke = stroke,
-                                                        trackColor = trackColor,
-                                                        rotation = rotation,
-                                                )
-                                        else ->
-                                                drawSpringProgress(
-                                                        center,
-                                                        radius,
-                                                        displayedProgress,
-                                                        accentColor,
-                                                        stroke,
-                                                        trackColor,
-                                                        rotation
-                                                )
-                                    }
+                                    drawFallbackProgress(
+                                            progressStyle = progressStyle,
+                                            preset = preset,
+                                            center = center,
+                                            radius = radius,
+                                            progress = displayedProgress,
+                                            color = accentColor,
+                                            stroke = stroke,
+                                            trackColor = trackColor,
+                                            rotation = rotation,
+                                            looping = looping,
+                                    )
                                 }
                     }
-        }
-    }
-}
-
-/** Scrub Lottie progress while pulling, then loop the animation while loading when motion is allowed. */
-@Composable
-private fun PullLottieIndicator(
-        file: File,
-        preset: String,
-        progress: Float,
-        isRefreshing: Boolean,
-        reduceMotion: Boolean,
-        accentColor: Color,
-        trackColor: Color,
-        indicatorStrokeWidth: Dp,
-        modifier: Modifier,
-) {
-    val composition by rememberLottieComposition(LottieCompositionSpec.File(file.absolutePath))
-    val animatedProgress by
-            animateLottieCompositionAsState(
-                    composition = composition,
-                    isPlaying = isRefreshing && !reduceMotion,
-                    iterations = LottieConstants.IterateForever,
-            )
-
-    Box(modifier) {
-        if (composition != null) {
-            LottieAnimation(
-                    composition = composition,
-                    progress = {
-                        when {
-                            isRefreshing && reduceMotion -> 1f
-                            isRefreshing -> animatedProgress
-                            else -> progress.coerceIn(0f, 1f)
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            Canvas(Modifier.fillMaxSize()) {
-                val diameter = min(size.width, size.height)
-                val center = Offset(size.width / 2f, size.height / 2f)
-                val radius = diameter * 0.42f
-                val stroke = min(max(0.5.dp.toPx(), indicatorStrokeWidth.toPx()), diameter * 0.25f)
-                when (preset) {
-                    "liquid" -> drawLiquidProgress(center, radius, progress, accentColor, stroke, trackColor)
-                    "minimal" -> drawMinimalProgress(center, radius, progress, accentColor, stroke, trackColor = trackColor)
-                    else -> drawSpringProgress(center, radius, progress, accentColor, stroke, trackColor = trackColor)
-                }
-            }
         }
     }
 }
@@ -401,6 +300,7 @@ private fun PullLottieIndicator(
 /** Draw the shared progress ring used around platform icons and image assets. */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawCustomProgressRing(
         preset: String,
+        progressStyle: String,
         progress: Float,
         isRefreshing: Boolean,
         rotation: Float,
@@ -412,6 +312,17 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawCustomProgressR
     val center = Offset(size.width / 2f, size.height / 2f)
     val radius = diameter * 0.45f
     val stroke = min(max(0.5.dp.toPx(), strokeWidth), diameter * 0.25f)
+    when (progressStyle) {
+        "none" -> return
+        "dots" -> {
+            drawDotsProgress(center, radius, progress, color, trackColor, stroke, rotation, isRefreshing)
+            return
+        }
+        "arc" -> {
+            drawOrbitalProgress(center, radius, progress, color, stroke, trackColor, rotation, isRefreshing, drawCore = false)
+            return
+        }
+    }
     val sweep = if (isRefreshing) 270f else 360f * progress.coerceIn(0f, 1f)
     val start = -90f + if (isRefreshing) rotation else 0f
 
@@ -451,6 +362,27 @@ private fun nativeAndroidIcon(name: String): ImageVector? =
             else -> null
         }
 
+/**
+ * Timing for one animated value under the selected motion: bouncy springs for
+ * `spring`/`pulse`, eased tweens for `liquid`, and an immediate snap for `spin`
+ * (which loops instead) or when motion is disabled.
+ */
+private fun motionSpec(
+        motionEnabled: Boolean,
+        motion: String,
+        durationMillis: Int,
+        springStiffness: Float,
+): FiniteAnimationSpec<Float> =
+        when {
+            !motionEnabled || motion == "spin" -> snap()
+            motion == "spring" || motion == "pulse" ->
+                    spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = springStiffnessForDuration(springStiffness, durationMillis),
+                    )
+            else -> tween(durationMillis = durationMillis)
+        }
+
 /** Scale spring stiffness around the default duration while keeping extreme values stable. */
 private fun springStiffnessForDuration(base: Float, durationMillis: Int): Float {
     if (durationMillis <= 0) return base
@@ -485,6 +417,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLiquidProgress(
         color: Color,
         stroke: Float,
         trackColor: Color,
+        phaseOffset: Float = 0f,
 ) {
     val circle =
             Path().apply {
@@ -509,7 +442,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLiquidProgress(
                     val x = center.x - radius + (radius * 2f * step / segments)
                     val phase =
                             ((x - center.x) / radius * (PI.toFloat() * 1.5f)) +
-                                    progress * PI.toFloat()
+                                    progress * PI.toFloat() +
+                                    phaseOffset * PI.toFloat() / 180f
                     lineTo(x, waterline + sin(phase) * amplitude)
                 }
                 lineTo(center.x + radius, center.y + radius)
@@ -525,6 +459,125 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLiquidProgress(
         )
     }
     drawCircle(trackColor, radius, center, style = Stroke(width = stroke))
+}
+
+/** Select the fallback drawing from the resolved progress-style, keeping the preset's ring variant. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFallbackProgress(
+        progressStyle: String,
+        preset: String,
+        center: Offset,
+        radius: Float,
+        progress: Float,
+        color: Color,
+        stroke: Float,
+        trackColor: Color,
+        rotation: Float,
+        looping: Boolean,
+) {
+    when (progressStyle) {
+        "wave" -> drawLiquidProgress(center, radius, progress, color, stroke, trackColor, phaseOffset = rotation)
+        "arc" -> drawOrbitalProgress(center, radius, progress, color, stroke, trackColor, rotation, looping)
+        "dots" -> drawDotsProgress(center, radius, progress, color, trackColor, stroke, rotation, looping)
+        "none" ->
+                if (looping) drawCircle(color, radius * 0.24f, center)
+                else drawPullArrow(center, radius, color, stroke)
+        else ->
+                if (preset == "minimal") {
+                    drawMinimalProgress(center, radius, progress, color, stroke, trackColor, rotation)
+                } else {
+                    drawSpringProgress(center, radius, progress, color, stroke, trackColor, rotation)
+                }
+    }
+}
+
+/** Draw the orbital arc: a thin track, a progress arc, and a satellite riding its leading edge. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawOrbitalProgress(
+        center: Offset,
+        radius: Float,
+        progress: Float,
+        color: Color,
+        stroke: Float,
+        trackColor: Color,
+        rotation: Float,
+        looping: Boolean,
+        drawCore: Boolean = true,
+) {
+    drawCircle(trackColor, radius, center, style = Stroke(width = max(0.5.dp.toPx(), stroke * 0.5f)))
+    val start = -90f + rotation
+    val sweep = if (looping) 110f else 300f * progress.coerceIn(0f, 1f)
+    drawArc(
+            color = color,
+            startAngle = start,
+            sweepAngle = sweep,
+            useCenter = false,
+            topLeft = Offset(center.x - radius, center.y - radius),
+            size = androidx.compose.ui.geometry.Size(radius * 2f, radius * 2f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round),
+    )
+    val head = (start + sweep) * PI.toFloat() / 180f
+    drawCircle(
+            color,
+            max(stroke * 1.1f, radius * 0.14f),
+            Offset(center.x + cos(head) * radius, center.y + sin(head) * radius),
+    )
+    if (drawCore) drawCircle(color.copy(alpha = color.alpha * 0.85f), radius * 0.18f, center)
+}
+
+/** Draw eight dots that fill with pull progress and chase around the ring while looping. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawDotsProgress(
+        center: Offset,
+        radius: Float,
+        progress: Float,
+        color: Color,
+        trackColor: Color,
+        stroke: Float,
+        rotation: Float,
+        looping: Boolean,
+) {
+    val count = 8
+    val dotRadius = max(stroke * 0.9f, radius * 0.12f)
+    val orbit = radius - dotRadius
+    val lit = ceil(progress.coerceIn(0f, 1f) * count).toInt()
+    val headIndex = ((rotation / 360f) * count).toInt().mod(count)
+    for (index in 0 until count) {
+        val angle = (-90f + index * 360f / count) * PI.toFloat() / 180f
+        val dotColor =
+                if (looping) {
+                    val distance = (headIndex - index).mod(count)
+                    color.copy(alpha = color.alpha * max(0.2f, 1f - distance * 0.16f))
+                } else if (index < lit) {
+                    color
+                } else {
+                    trackColor
+                }
+        drawCircle(dotColor, dotRadius, Offset(center.x + cos(angle) * orbit, center.y + sin(angle) * orbit))
+    }
+}
+
+/** Draw the downward arrow shared by the spring ring and the progress-less style. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPullArrow(
+        center: Offset,
+        radius: Float,
+        color: Color,
+        stroke: Float,
+) {
+    val arrowTop = center.y - radius * 0.28f
+    val arrowBottom = center.y + radius * 0.22f
+    drawLine(color, Offset(center.x, arrowTop), Offset(center.x, arrowBottom), strokeWidth = stroke, cap = StrokeCap.Round)
+    drawLine(
+            color,
+            Offset(center.x - radius * 0.18f, arrowBottom - radius * 0.18f),
+            Offset(center.x, arrowBottom),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+    )
+    drawLine(
+            color,
+            Offset(center.x + radius * 0.18f, arrowBottom - radius * 0.18f),
+            Offset(center.x, arrowBottom),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+    )
 }
 
 /** Draw the spring preset's circular track and progress arc. */
@@ -547,29 +600,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSpringProgress(
             size = androidx.compose.ui.geometry.Size(radius * 2f, radius * 2f),
             style = Stroke(width = stroke, cap = StrokeCap.Round),
     )
-    val arrowTop = center.y - radius * 0.28f
-    val arrowBottom = center.y + radius * 0.22f
-    drawLine(
-            color,
-            Offset(center.x, arrowTop),
-            Offset(center.x, arrowBottom),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-    )
-    drawLine(
-            color,
-            Offset(center.x - radius * 0.18f, arrowBottom - radius * 0.18f),
-            Offset(center.x, arrowBottom),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-    )
-    drawLine(
-            color,
-            Offset(center.x + radius * 0.18f, arrowBottom - radius * 0.18f),
-            Offset(center.x, arrowBottom),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-    )
+    drawPullArrow(center, radius, color, stroke)
 }
 
 /** Draw the minimal preset's thin circular track and progress arc. */

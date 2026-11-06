@@ -1,7 +1,6 @@
 package dev.momotombo.plugins.nativephp_pull_to_refresh.ui
 
 import android.animation.ValueAnimator
-import android.os.Build
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,10 +25,6 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
-import coil3.ImageLoader
-import coil3.gif.AnimatedImageDecoder
-import coil3.gif.GifDecoder
-import coil3.svg.SvgDecoder
 import com.nativephp.mobile.ui.nativerender.NativeElementBridge
 import com.nativephp.mobile.ui.nativerender.NativeUINode
 import com.nativephp.mobile.ui.nativerender.NodeView
@@ -49,8 +44,17 @@ object NativePhpPullToRefreshRenderer {
         val props = node.props
         val preset =
                 props.getString("preset", "spring").lowercase().let {
-                    if (it == "liquid" || it == "minimal") it else "spring"
+                    if (it in setOf("liquid", "minimal", "orbital", "wave", "pulse")) it else "spring"
                 }
+        val declaredChildren = splitPullToRefreshChildren(node)
+        val customIndicator = declaredChildren.indicator
+        val shape = customIndicator?.props?.getString("shape", props.getString("shape", "circle"))
+                ?: props.getString("shape", "circle")
+        val progressStyle = props.getString("progress_style", "ring")
+        val motion = customIndicator?.props?.getString("motion", props.getString("motion", "spring"))
+                ?: props.getString("motion", "spring")
+        val progressMode = customIndicator?.props?.getString("progress_mode", props.getString("progress_mode", "scrub"))
+                ?: props.getString("progress_mode", "scrub")
         val threshold = props.getFloat("threshold", 88f).coerceAtLeast(1f).dp
         val indicatorSize = props.getFloat("indicator_size", 32f).coerceAtLeast(1f).dp
         val indicatorStrokeWidth = props.getFloat("indicator_stroke_width", 2.5f).coerceAtLeast(0.5f).dp
@@ -61,6 +65,7 @@ object NativePhpPullToRefreshRenderer {
                     if (it == SUCCESS || it == ERROR) it else IDLE
                 }
         val resultDuration = props.getInt("result_duration", 500).coerceAtLeast(0).toLong()
+        val renderSequence = props.getInt("render_sequence", 0)
         val refreshActionLabel = props.getString("refresh_action_label", "Refresh").ifBlank { "Refresh" }
         val pullLabel = props.getString("pull_label", "Pull to refresh").ifBlank { "Pull to refresh" }
         val releaseLabel = props.getString("release_label", "Release to refresh").ifBlank { "Release to refresh" }
@@ -98,19 +103,6 @@ object NativePhpPullToRefreshRenderer {
                 remember(context, assetPath) { resolveLocalIndicatorFile(context, assetPath) }
         val lottieFile =
                 remember(context, lottiePath) { resolveLocalIndicatorFile(context, lottiePath) }
-        val imageLoader =
-                remember(context) {
-                    ImageLoader.Builder(context)
-                            .components {
-                                add(SvgDecoder.Factory())
-                                if (Build.VERSION.SDK_INT >= 28) {
-                                    add(AnimatedImageDecoder.Factory())
-                                } else {
-                                    add(GifDecoder.Factory())
-                                }
-                            }
-                            .build()
-                }
         val reduceMotion = remember { !ValueAnimator.areAnimatorsEnabled() }
 
         val pullState = rememberPullToRefreshState()
@@ -126,9 +118,10 @@ object NativePhpPullToRefreshRenderer {
         // changed, so keying only on `refreshing` and `result` can lock forever.
         LaunchedEffect(node, refreshing, result) {
             lifecycleState.value = lifecycleState.value.hostUpdated(
-                children = node.children,
+                children = declaredChildren.content,
                 isRefreshing = refreshing,
                 result = result,
+                renderSequence = renderSequence,
             )
         }
 
@@ -159,6 +152,9 @@ object NativePhpPullToRefreshRenderer {
         val interactionLocked = busy
         val indicatorState = PullIndicatorState(
             preset = preset,
+            progressStyle = progressStyle,
+            motion = motion,
+            progressMode = progressMode,
             progress = pullState.distanceFraction,
             isRefreshing = busy,
             result = IDLE,
@@ -178,13 +174,13 @@ object NativePhpPullToRefreshRenderer {
             androidIconName = androidIconName,
             assetFile = assetFile,
             lottieFile = lottieFile,
-            imageLoader = imageLoader,
         )
         val requestRefresh: () -> Boolean = {
             val request = lifecycleState.value.requestRefresh(
                 callbackAvailable = refreshCallback != 0,
                 isRefreshing = interactionLocked,
-                children = node.children,
+                children = declaredChildren.content,
+                renderSequence = renderSequence,
             )
             if (!request.accepted) {
                 false
@@ -244,38 +240,74 @@ object NativePhpPullToRefreshRenderer {
                                 },
         ) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(node.children, key = { child -> child.id }) { child ->
+                items(declaredChildren.content, key = { child -> child.id }) { child ->
                     NodeView(node = child)
                 }
             }
 
             PullToRefreshDefaults.IndicatorBox(
-                    modifier = Modifier.align(Alignment.TopCenter),
+                    modifier = Modifier.align(Alignment.TopCenter).indicatorContainerWidth(shape),
                     state = pullState,
                     isRefreshing = busy,
                     maxDistance = threshold,
-                    containerColor = containerColor,
+                    shape = pullIndicatorShape(shape),
+                    containerColor = Color.Transparent,
                     elevation = PullToRefreshDefaults.Elevation,
             ) {
-                PullIndicator(state = indicatorState)
+                PullToRefreshSurface(shape = shape, color = containerColor, modifier = Modifier.fillMaxSize()) {
+                    if (customIndicator != null) {
+                        PullToRefreshCustomIndicator(
+                                indicator = customIndicator,
+                                progress = pullState.distanceFraction,
+                                isRefreshing = busy,
+                                result = IDLE,
+                                size = indicatorSize,
+                                reduceMotion = reduceMotion,
+                                motion = motion,
+                                progressMode = progressMode,
+                                animationDurationMillis = animationDurationMillis,
+                                modifier = Modifier.align(Alignment.Center),
+                        )
+                    } else {
+                        PullIndicator(state = indicatorState)
+                    }
+                }
             }
 
             if (showResultIndicator) {
                 PullToRefreshDefaults.IndicatorBox(
-                        modifier = Modifier.align(Alignment.TopCenter),
+                        modifier = Modifier.align(Alignment.TopCenter).indicatorContainerWidth(shape),
                         state = resultState,
                         isRefreshing = true,
                         maxDistance = threshold,
-                        containerColor = containerColor,
+                        shape = pullIndicatorShape(shape),
+                        containerColor = Color.Transparent,
                         elevation = PullToRefreshDefaults.Elevation,
                 ) {
-                    PullIndicator(
-                        state = indicatorState.copy(
-                            progress = 1f,
-                            isRefreshing = false,
-                            result = lifecycle.visibleResult,
-                        ),
-                    )
+                    PullToRefreshSurface(shape = shape, color = containerColor, modifier = Modifier.fillMaxSize()) {
+                        if (customIndicator != null) {
+                            PullToRefreshCustomIndicator(
+                                    indicator = customIndicator,
+                                    progress = 1f,
+                                    isRefreshing = false,
+                                    result = lifecycle.visibleResult,
+                                    size = indicatorSize,
+                                    reduceMotion = reduceMotion,
+                                    motion = motion,
+                                    progressMode = progressMode,
+                                    animationDurationMillis = animationDurationMillis,
+                                    modifier = Modifier.align(Alignment.Center),
+                            )
+                        } else {
+                            PullIndicator(
+                                state = indicatorState.copy(
+                                    progress = 1f,
+                                    isRefreshing = false,
+                                    result = lifecycle.visibleResult,
+                                ),
+                            )
+                        }
+                    }
                 }
             }
         }

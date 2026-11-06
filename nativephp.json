@@ -1,6 +1,6 @@
 {
     "name": "momotombo/nativephp-pull-to-refresh",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Customizable animated pull-to-refresh UI component for NativePHP Mobile on iOS and Android.",
     "namespace": "MomotomboPullToRefresh",
     "platforms": [
@@ -14,6 +14,30 @@
             "blade": "Momotombo\\NativePhpPullToRefresh\\Components\\PullToRefresh",
             "android_renderer": "dev.momotombo.plugins.nativephp_pull_to_refresh.ui.NativePhpPullToRefreshRenderer",
             "ios_renderer": "NativePhpPullToRefreshRenderer",
+            "self_closing": false
+        },
+        {
+            "type": "pull_to_refresh_indicator",
+            "element": "Momotombo\\NativePhpPullToRefresh\\Elements\\PullToRefreshIndicator",
+            "blade": "Momotombo\\NativePhpPullToRefresh\\Components\\PullToRefreshIndicator",
+            "android_renderer": "com.nativephp.plugins.native_ui.ui.EmptyRenderer",
+            "ios_renderer": "NativeUIEmptyRenderer",
+            "self_closing": false
+        },
+        {
+            "type": "pull_to_refresh_phase",
+            "element": "Momotombo\\NativePhpPullToRefresh\\Elements\\PullToRefreshPhase",
+            "blade": "Momotombo\\NativePhpPullToRefresh\\Components\\PullToRefreshPhase",
+            "android_renderer": "com.nativephp.plugins.native_ui.ui.EmptyRenderer",
+            "ios_renderer": "NativeUIEmptyRenderer",
+            "self_closing": false
+        },
+        {
+            "type": "pull_to_refresh_layer",
+            "element": "Momotombo\\NativePhpPullToRefresh\\Elements\\PullToRefreshLayer",
+            "blade": "Momotombo\\NativePhpPullToRefresh\\Components\\PullToRefreshLayer",
+            "android_renderer": "com.nativephp.plugins.native_ui.ui.EmptyRenderer",
+            "ios_renderer": "NativeUIEmptyRenderer",
             "self_closing": false
         }
     ],

@@ -3,6 +3,14 @@
 namespace Momotombo\NativePhpPullToRefresh\Elements;
 
 use InvalidArgumentException;
+use Momotombo\NativePhpPullToRefresh\Enums\AndroidIndicatorIcon;
+use Momotombo\NativePhpPullToRefresh\Enums\IndicatorShape;
+use Momotombo\NativePhpPullToRefresh\Enums\Motion;
+use Momotombo\NativePhpPullToRefresh\Enums\Preset;
+use Momotombo\NativePhpPullToRefresh\Enums\ProgressMode;
+use Momotombo\NativePhpPullToRefresh\Enums\ProgressStyle;
+use Momotombo\NativePhpPullToRefresh\Enums\RefreshResult;
+use Momotombo\NativePhpPullToRefresh\Support\Input;
 use Native\Mobile\Edge\CallbackRegistry;
 use Native\Mobile\Edge\Element;
 
@@ -11,12 +19,18 @@ use Native\Mobile\Edge\Element;
  */
 class PullToRefresh extends Element
 {
+    /**
+     * Props serialized when the author leaves them unset. `progress_style` and
+     * `motion` are absent on purpose: the preset supplies them.
+     */
     public const DEFAULTS = [
         'preset' => 'spring',
         'threshold' => 88.0,
         'indicator_size' => 32.0,
         'indicator_stroke_width' => 2.5,
         'animation_duration' => 240,
+        'shape' => 'circle',
+        'progress_mode' => 'scrub',
         'track_color' => '',
         'refreshing' => false,
         'result' => 'idle',
@@ -29,20 +43,27 @@ class PullToRefresh extends Element
         'error_label' => 'Refresh failed',
     ];
 
-    private const PRESETS = ['liquid', 'spring', 'minimal'];
-    private const RESULTS = ['idle', 'success', 'error'];
-    private const ANDROID_ICONS = [
-        'refresh',
-        'sync',
-        'arrow_downward',
-        'download',
-        'cloud_download',
-        'local_shipping',
+    /** Accessibility label setters keyed by their Blade attribute. */
+    private const LABEL_SETTERS = [
+        'refresh-action-label' => 'refreshActionLabel',
+        'pull-label' => 'pullLabel',
+        'release-label' => 'releaseLabel',
+        'refreshing-label' => 'refreshingLabel',
+        'success-label' => 'successLabel',
+        'error-label' => 'errorLabel',
     ];
 
     protected string $type = 'pull_to_refresh';
 
     protected array $componentProps = [];
+
+    /**
+     * Advances on every serialization so the render that follows the refresh
+     * callback is never byte-identical to the previous one. NativePHP drops
+     * identical frames entirely, which would otherwise leave native renderers
+     * with no signal that a no-change refresh finished.
+     */
+    private static int $renderSequence = 0;
 
     /** Create an empty pull-to-refresh EDGE element. */
     public static function make(): static
@@ -50,23 +71,79 @@ class PullToRefresh extends Element
         return new static;
     }
 
-    /** Select the native indicator treatment used while pulling and refreshing. */
-    public function preset(string $preset): static
+    /** Select the indicator treatment; it also supplies default progress style and motion. */
+    public function preset(Preset|string $preset): static
     {
-        $preset = strtolower(trim($preset));
-        if (! in_array($preset, self::PRESETS, true)) {
-            throw new InvalidArgumentException('Pull-to-refresh preset must be liquid, spring, or minimal.');
-        }
-
-        $this->componentProps['preset'] = $preset;
+        $this->componentProps['preset'] = Preset::parse($preset, 'preset')->value;
 
         return $this;
+    }
+
+    /** Apply every visual option that was set on `$appearance`. */
+    public function appearance(PullToRefreshAppearance $appearance): static
+    {
+        $this->componentProps = [...$this->componentProps, ...$appearance->toArray()];
+
+        return $this;
+    }
+
+    /** Select the silhouette of the indicator container. */
+    public function shape(IndicatorShape|string $shape): static
+    {
+        return $this->appearance(PullToRefreshAppearance::make()->shape($shape));
+    }
+
+    /** Select how the built-in indicator draws progress. */
+    public function progressStyle(ProgressStyle|string $style): static
+    {
+        return $this->appearance(PullToRefreshAppearance::make()->progressStyle($style));
+    }
+
+    /** Select the non-essential native motion treatment. */
+    public function motion(Motion|string $motion): static
+    {
+        return $this->appearance(PullToRefreshAppearance::make()->motion($motion));
+    }
+
+    /** Decide whether progress follows the gesture, loops, or stays full. */
+    public function progressMode(ProgressMode|string $mode): static
+    {
+        return $this->appearance(PullToRefreshAppearance::make()->progressMode($mode));
+    }
+
+    /** Attach one Blade/PHP-composed indicator declaration to this scroll container. */
+    public function indicator(PullToRefreshIndicator $indicator): static
+    {
+        return $this->addChild($indicator);
+    }
+
+    /** Keep composition sentinels at the container root and prevent duplicates. */
+    public function addChild(Element $child): static
+    {
+        $type = $child->getType();
+        if (in_array($type, ['pull_to_refresh_phase', 'pull_to_refresh_layer'], true)) {
+            throw new InvalidArgumentException("{$type} must be nested inside a pull-to-refresh-indicator.");
+        }
+
+        if ($type === 'pull_to_refresh_indicator') {
+            if (! $child instanceof PullToRefreshIndicator) {
+                throw new InvalidArgumentException('Pull-to-refresh indicator must use PullToRefreshIndicator.');
+            }
+
+            foreach ($this->getChildren() as $existing) {
+                if ($existing->getType() === 'pull_to_refresh_indicator') {
+                    throw new InvalidArgumentException('Pull-to-refresh accepts only one custom indicator.');
+                }
+            }
+        }
+
+        return parent::addChild($child);
     }
 
     /** Set the distance in points/dp used to normalize pull progress. */
     public function threshold(mixed $points): static
     {
-        $this->componentProps['threshold'] = self::positiveNumber($points, 'threshold');
+        $this->componentProps['threshold'] = Input::positiveNumber($points, 'threshold');
 
         return $this;
     }
@@ -74,7 +151,7 @@ class PullToRefresh extends Element
     /** Set the indicator diameter in points/dp. */
     public function indicatorSize(mixed $points): static
     {
-        $this->componentProps['indicator_size'] = self::positiveNumber($points, 'indicator-size');
+        $this->componentProps['indicator_size'] = Input::positiveNumber($points, 'indicator-size');
 
         return $this;
     }
@@ -82,7 +159,7 @@ class PullToRefresh extends Element
     /** Set the custom progress stroke width in points/dp. */
     public function indicatorStrokeWidth(mixed $points): static
     {
-        $this->componentProps['indicator_stroke_width'] = self::positiveNumber($points, 'indicator-stroke-width');
+        $this->componentProps['indicator_stroke_width'] = Input::positiveNumber($points, 'indicator-stroke-width');
 
         return $this;
     }
@@ -90,7 +167,7 @@ class PullToRefresh extends Element
     /** Set the duration in milliseconds for non-essential indicator transitions. */
     public function animationDuration(mixed $milliseconds): static
     {
-        $this->componentProps['animation_duration'] = self::nonNegativeInteger($milliseconds, 'animation-duration');
+        $this->componentProps['animation_duration'] = Input::milliseconds($milliseconds, 'animation-duration');
 
         return $this;
     }
@@ -98,27 +175,19 @@ class PullToRefresh extends Element
     /** Set the iOS SF Symbol used inside the custom indicator. */
     public function indicatorIconIos(string $symbol): static
     {
-        $symbol = trim($symbol);
-        if ($symbol === '') {
-            throw new InvalidArgumentException('Pull-to-refresh indicator-icon-ios must name an SF Symbol.');
-        }
-
         $this->assertVisualSource('native-icon');
-        $this->componentProps['indicator_icon_ios'] = $symbol;
+        $this->componentProps['indicator_icon_ios'] = Input::nonEmptyString($symbol, 'indicator-icon-ios');
 
         return $this;
     }
 
     /** Set the supported Material icon used inside the Android indicator. */
-    public function indicatorIconAndroid(string $icon): static
+    public function indicatorIconAndroid(AndroidIndicatorIcon|string $icon): static
     {
-        $icon = strtolower(trim($icon));
-        if (! in_array($icon, self::ANDROID_ICONS, true)) {
-            throw new InvalidArgumentException('Pull-to-refresh indicator-icon-android must be refresh, sync, arrow_downward, download, cloud_download, or local_shipping.');
-        }
+        $icon = AndroidIndicatorIcon::parse($icon, 'indicator-icon-android');
 
         $this->assertVisualSource('native-icon');
-        $this->componentProps['indicator_icon_android'] = $icon;
+        $this->componentProps['indicator_icon_android'] = $icon->value;
 
         return $this;
     }
@@ -126,11 +195,7 @@ class PullToRefresh extends Element
     /** Set a local PNG, SVG, or GIF path relative to the consuming app's public directory. */
     public function indicatorAsset(string $path): static
     {
-        $path = self::localAssetPath($path, 'indicator-asset');
-        $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-        if (! in_array($extension, ['png', 'svg', 'gif'], true)) {
-            throw new InvalidArgumentException('Pull-to-refresh indicator-asset must point to a PNG, SVG, or GIF under public/.');
-        }
+        $path = Input::publicAsset($path, 'indicator-asset', ['png', 'svg', 'gif'], 'a PNG, SVG, or GIF');
 
         $this->assertVisualSource('asset');
         $this->componentProps['indicator_asset'] = $path;
@@ -141,10 +206,7 @@ class PullToRefresh extends Element
     /** Set a local Lottie JSON path relative to the consuming app's public directory. */
     public function indicatorLottie(string $path): static
     {
-        $path = self::localAssetPath($path, 'indicator-lottie');
-        if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) !== 'json') {
-            throw new InvalidArgumentException('Pull-to-refresh indicator-lottie must point to a Lottie JSON file under public/.');
-        }
+        $path = Input::publicAsset($path, 'indicator-lottie', ['json'], 'a Lottie JSON file');
 
         $this->assertVisualSource('lottie');
         $this->componentProps['indicator_lottie'] = $path;
@@ -155,7 +217,7 @@ class PullToRefresh extends Element
     /** Set the accent color for progress, glyphs, and indicator artwork. */
     public function accentColor(string|int $color): static
     {
-        $this->componentProps['accent_color'] = self::colorValue($color, 'accent-color');
+        $this->componentProps['accent_color'] = Input::color($color, 'accent-color');
 
         return $this;
     }
@@ -163,7 +225,7 @@ class PullToRefresh extends Element
     /** Set the indicator's circular background color. */
     public function containerColor(string|int $color): static
     {
-        $this->componentProps['container_color'] = self::colorValue($color, 'container-color');
+        $this->componentProps['container_color'] = Input::color($color, 'container-color');
 
         return $this;
     }
@@ -171,11 +233,7 @@ class PullToRefresh extends Element
     /** Set the inactive progress track color; renderers fall back to the theme when omitted. */
     public function trackColor(string|int $color): static
     {
-        if (is_string($color) && trim($color) === '') {
-            throw new InvalidArgumentException('Pull-to-refresh track-color cannot be empty.');
-        }
-
-        $this->componentProps['track_color'] = self::colorValue($color, 'track-color');
+        $this->componentProps['track_color'] = Input::color($color, 'track-color');
 
         return $this;
     }
@@ -189,14 +247,9 @@ class PullToRefresh extends Element
     }
 
     /** Publish the latest refresh outcome; use idle before starting another request. */
-    public function result(string $result): static
+    public function result(RefreshResult|string $result): static
     {
-        $result = strtolower(trim($result));
-        if (! in_array($result, self::RESULTS, true)) {
-            throw new InvalidArgumentException('Pull-to-refresh result must be idle, success, or error.');
-        }
-
-        $this->componentProps['result'] = $result;
+        $this->componentProps['result'] = RefreshResult::parse($result, 'result')->value;
 
         return $this;
     }
@@ -204,7 +257,7 @@ class PullToRefresh extends Element
     /** Set how long success/error feedback remains visible, in milliseconds. */
     public function resultDuration(mixed $milliseconds): static
     {
-        $this->componentProps['result_duration'] = self::nonNegativeInteger($milliseconds, 'result-duration');
+        $this->componentProps['result_duration'] = Input::milliseconds($milliseconds, 'result-duration');
 
         return $this;
     }
@@ -212,12 +265,7 @@ class PullToRefresh extends Element
     /** Set a parent Native Component method to invoke after an accepted refresh gesture. */
     public function onRefresh(string $method): static
     {
-        $method = trim($method);
-        if ($method === '') {
-            throw new InvalidArgumentException('Pull-to-refresh on-refresh must name a component method.');
-        }
-
-        $this->componentProps['on_refresh'] = $method;
+        $this->componentProps['on_refresh'] = Input::nonEmptyString($method, 'on-refresh');
 
         return $this;
     }
@@ -228,90 +276,65 @@ class PullToRefresh extends Element
      */
     public function applyAttributes(array $attrs): void
     {
-        if (array_key_exists('preset', $attrs)) {
-            $this->preset(self::stringValue($attrs['preset'], 'preset'));
-        }
+        $setters = [
+            'preset' => fn (mixed $value) => $this->preset(Input::string($value, 'preset')),
+            'threshold' => fn (mixed $value) => $this->threshold($value),
+            'indicator-size' => fn (mixed $value) => $this->indicatorSize($value),
+            'indicator-stroke-width' => fn (mixed $value) => $this->indicatorStrokeWidth($value),
+            'animation-duration' => fn (mixed $value) => $this->animationDuration($value),
+            'accent-color' => fn (mixed $value) => $this->accentColor(Input::color($value, 'accent-color')),
+            'container-color' => fn (mixed $value) => $this->containerColor(Input::color($value, 'container-color')),
+            'refreshing' => fn (mixed $value) => $this->refreshing(Input::boolean($value, 'refreshing')),
+            'result' => fn (mixed $value) => $this->result(Input::string($value, 'result')),
+            'result-duration' => fn (mixed $value) => $this->resultDuration($value),
+        ];
 
-        if (array_key_exists('threshold', $attrs)) {
-            $this->threshold($attrs['threshold']);
-        }
-
-        if (array_key_exists('indicator-size', $attrs)) {
-            $this->indicatorSize($attrs['indicator-size']);
-        }
-
-        if (array_key_exists('indicator-stroke-width', $attrs)) {
-            $this->indicatorStrokeWidth($attrs['indicator-stroke-width']);
-        }
-
-        if (array_key_exists('animation-duration', $attrs)) {
-            $this->animationDuration($attrs['animation-duration']);
-        }
-
-        if (self::hasNonEmptyAttribute($attrs, 'indicator-icon-ios')) {
-            $this->indicatorIconIos(self::stringValue($attrs['indicator-icon-ios'], 'indicator-icon-ios'));
-        }
-
-        if (self::hasNonEmptyAttribute($attrs, 'indicator-icon-android')) {
-            $this->indicatorIconAndroid(self::stringValue($attrs['indicator-icon-android'], 'indicator-icon-android'));
-        }
-
-        if (self::hasNonEmptyAttribute($attrs, 'indicator-asset')) {
-            $this->indicatorAsset(self::stringValue($attrs['indicator-asset'], 'indicator-asset'));
-        }
-
-        if (self::hasNonEmptyAttribute($attrs, 'indicator-lottie')) {
-            $this->indicatorLottie(self::stringValue($attrs['indicator-lottie'], 'indicator-lottie'));
-        }
-
-        if (array_key_exists('accent-color', $attrs)) {
-            $this->accentColor(self::colorValue($attrs['accent-color'], 'accent-color'));
-        }
-
-        if (array_key_exists('container-color', $attrs)) {
-            $this->containerColor(self::colorValue($attrs['container-color'], 'container-color'));
-        }
-
-        if (self::hasNonEmptyAttribute($attrs, 'indicator-track-color')) {
-            $this->trackColor(self::colorValue($attrs['indicator-track-color'], 'indicator-track-color'));
-        }
-
-        if (array_key_exists('refreshing', $attrs)) {
-            $this->refreshing(self::booleanValue($attrs['refreshing'], 'refreshing'));
-        }
-
-        if (array_key_exists('result', $attrs)) {
-            $this->result(self::stringValue($attrs['result'], 'result'));
-        }
-
-        if (array_key_exists('result-duration', $attrs)) {
-            $this->resultDuration($attrs['result-duration']);
-        }
-
-        foreach ([
-            'refresh-action-label' => 'refreshActionLabel',
-            'pull-label' => 'pullLabel',
-            'release-label' => 'releaseLabel',
-            'refreshing-label' => 'refreshingLabel',
-            'success-label' => 'successLabel',
-            'error-label' => 'errorLabel',
-        ] as $attribute => $setter) {
+        foreach ($setters as $attribute => $setter) {
             if (array_key_exists($attribute, $attrs)) {
-                $this->{$setter}(self::stringValue($attrs[$attribute], $attribute));
+                $setter($attrs[$attribute]);
+            }
+        }
+
+        // Optional visuals: blank conditional bindings mean "not set" so presets keep their defaults.
+        $this->appearance(PullToRefreshAppearance::make()->applyAttributes($attrs));
+
+        $optionalSetters = [
+            'indicator-icon-ios' => fn (mixed $value) => $this->indicatorIconIos(Input::string($value, 'indicator-icon-ios')),
+            'indicator-icon-android' => fn (mixed $value) => $this->indicatorIconAndroid(Input::string($value, 'indicator-icon-android')),
+            'indicator-asset' => fn (mixed $value) => $this->indicatorAsset(Input::string($value, 'indicator-asset')),
+            'indicator-lottie' => fn (mixed $value) => $this->indicatorLottie(Input::string($value, 'indicator-lottie')),
+            'indicator-track-color' => fn (mixed $value) => $this->trackColor(Input::color($value, 'indicator-track-color')),
+        ];
+
+        foreach ($optionalSetters as $attribute => $setter) {
+            if (Input::has($attrs, $attribute)) {
+                $setter($attrs[$attribute]);
+            }
+        }
+
+        foreach (self::LABEL_SETTERS as $attribute => $setter) {
+            if (array_key_exists($attribute, $attrs)) {
+                $this->{$setter}(Input::string($attrs[$attribute], $attribute));
             }
         }
 
         $refreshMethod = $attrs['on-refresh'] ?? $attrs['on_refresh'] ?? null;
-        if ($refreshMethod !== null && $refreshMethod !== false && $refreshMethod !== '') {
-            $this->onRefresh(self::stringValue($refreshMethod, 'on-refresh'));
+        if (Input::has(['on-refresh' => $refreshMethod], 'on-refresh')) {
+            $this->onRefresh(Input::string($refreshMethod, 'on-refresh'));
         }
     }
 
     /** Add stable defaults and replace the PHP method name with NativePHP's callback id. */
     protected function resolveProps(CallbackRegistry $registry): array
     {
+        $this->validateCustomIndicator();
+
+        $preset = Preset::from($this->componentProps['preset'] ?? self::DEFAULTS['preset']);
+
         $props = [
             ...self::DEFAULTS,
+            'progress_style' => $preset->defaultProgressStyle()->value,
+            'motion' => $preset->defaultMotion()->value,
             ...$this->componentProps,
         ];
 
@@ -319,7 +342,26 @@ class PullToRefresh extends Element
             $props['on_refresh'] = $registry->register($this->componentProps['on_refresh']);
         }
 
+        self::$renderSequence = self::$renderSequence >= 2_000_000_000 ? 1 : self::$renderSequence + 1;
+        $props['render_sequence'] = self::$renderSequence;
+
         return $props;
+    }
+
+    /** Validate the declarative overlay before it crosses the PHP/native boundary. */
+    private function validateCustomIndicator(): void
+    {
+        foreach ($this->getChildren() as $child) {
+            if ($child->getType() !== 'pull_to_refresh_indicator') {
+                continue;
+            }
+
+            if (! $child instanceof PullToRefreshIndicator) {
+                throw new InvalidArgumentException('Pull-to-refresh indicator must be created by this package.');
+            }
+
+            $child->validateComposition();
+        }
     }
 
     /** Keep a platform icon pair, a local image, and Lottie mutually exclusive as visual sources. */
@@ -337,123 +379,10 @@ class PullToRefresh extends Element
         }
     }
 
-    /** Require non-empty accessibility text so assistive technology always has a useful state. */
-    private static function nonEmptyLabel(string $label, string $name): string
-    {
-        $label = trim($label);
-        if ($label === '') {
-            throw new InvalidArgumentException("Pull-to-refresh {$name} cannot be empty.");
-        }
-
-        return $label;
-    }
-
-    /** Normalize local asset paths and reject schemes, absolute paths, empty segments, and traversal. */
-    private static function localAssetPath(string $path, string $name): string
-    {
-        $path = trim(str_replace('\\', '/', $path));
-        if (str_starts_with($path, './')) {
-            $path = substr($path, 2);
-        }
-        $segments = explode('/', $path);
-
-        if (
-            $path === '' || str_starts_with($path, '/') ||
-            preg_match('/^[a-z][a-z0-9+.-]*:/i', $path) === 1 ||
-            in_array('..', $segments, true) || in_array('', $segments, true) ||
-            str_contains($path, "\0")
-        ) {
-            throw new InvalidArgumentException("Pull-to-refresh {$name} must be a relative path inside public/ without parent-directory segments or a URL scheme.");
-        }
-
-        return $path;
-    }
-
-    /** Treat absent and empty conditional Blade bindings as an unset optional prop. */
-    private static function hasNonEmptyAttribute(array $attrs, string $name): bool
-    {
-        if (! array_key_exists($name, $attrs)) {
-            return false;
-        }
-
-        $value = $attrs[$name];
-
-        return $value !== null && $value !== false && (! is_string($value) || trim($value) !== '');
-    }
-
-    /** Require a string at the Blade attribute boundary with a prop-specific error. */
-    private static function stringValue(mixed $value, string $name): string
-    {
-        if (! is_string($value)) {
-            throw new InvalidArgumentException("Pull-to-refresh {$name} must be a string.");
-        }
-
-        return $value;
-    }
-
-    /** Preserve supported EDGE color strings and ARGB integers while rejecting other wire types. */
-    private static function colorValue(mixed $value, string $name): string|int
-    {
-        if (is_string($value) && trim($value) === '') {
-            throw new InvalidArgumentException("Pull-to-refresh {$name} cannot be empty.");
-        }
-
-        if (! is_string($value) && ! is_int($value)) {
-            throw new InvalidArgumentException("Pull-to-refresh {$name} must be a color string or ARGB integer.");
-        }
-
-        return $value;
-    }
-
-    /** Parse Blade's boolean spellings without silently coercing arbitrary values. */
-    private static function booleanValue(mixed $value, string $name): bool
-    {
-        if (is_bool($value)) {
-            return $value;
-        }
-
-        $boolean = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
-        if ($boolean === null) {
-            throw new InvalidArgumentException("Pull-to-refresh {$name} must be boolean.");
-        }
-
-        return $boolean;
-    }
-
-    /** Normalize a finite positive dimension into the numeric value sent to native renderers. */
-    private static function positiveNumber(mixed $value, string $name): float
-    {
-        if (! is_numeric($value)) {
-            throw new InvalidArgumentException("Pull-to-refresh {$name} must be a number greater than zero.");
-        }
-
-        $number = (float) $value;
-        if (! is_finite($number) || $number <= 0) {
-            throw new InvalidArgumentException("Pull-to-refresh {$name} must be a number greater than zero.");
-        }
-
-        return $number;
-    }
-
-    /** Normalize non-negative millisecond values while rejecting fractional or non-numeric input. */
-    private static function nonNegativeInteger(mixed $value, string $name): int
-    {
-        if (! is_int($value) && ! is_string($value)) {
-            throw new InvalidArgumentException("Pull-to-refresh {$name} must be a non-negative integer in milliseconds.");
-        }
-
-        $integer = filter_var($value, FILTER_VALIDATE_INT);
-        if ($integer === false || $integer < 0) {
-            throw new InvalidArgumentException("Pull-to-refresh {$name} must be a non-negative integer in milliseconds.");
-        }
-
-        return $integer;
-    }
-
     /** Override the localized name exposed for the native accessibility refresh action. */
     public function refreshActionLabel(string $label): static
     {
-        $this->componentProps['refresh_action_label'] = self::nonEmptyLabel($label, 'refresh-action-label');
+        $this->componentProps['refresh_action_label'] = Input::nonEmptyString($label, 'refresh-action-label');
 
         return $this;
     }
@@ -461,7 +390,7 @@ class PullToRefresh extends Element
     /** Override the accessibility announcement while the list is waiting for a pull. */
     public function pullLabel(string $label): static
     {
-        $this->componentProps['pull_label'] = self::nonEmptyLabel($label, 'pull-label');
+        $this->componentProps['pull_label'] = Input::nonEmptyString($label, 'pull-label');
 
         return $this;
     }
@@ -469,7 +398,7 @@ class PullToRefresh extends Element
     /** Override the accessibility announcement when the gesture reaches its activation point. */
     public function releaseLabel(string $label): static
     {
-        $this->componentProps['release_label'] = self::nonEmptyLabel($label, 'release-label');
+        $this->componentProps['release_label'] = Input::nonEmptyString($label, 'release-label');
 
         return $this;
     }
@@ -477,7 +406,7 @@ class PullToRefresh extends Element
     /** Override the accessibility announcement while the app refreshes its content. */
     public function refreshingLabel(string $label): static
     {
-        $this->componentProps['refreshing_label'] = self::nonEmptyLabel($label, 'refreshing-label');
+        $this->componentProps['refreshing_label'] = Input::nonEmptyString($label, 'refreshing-label');
 
         return $this;
     }
@@ -485,7 +414,7 @@ class PullToRefresh extends Element
     /** Override the accessibility announcement for a successful refresh. */
     public function successLabel(string $label): static
     {
-        $this->componentProps['success_label'] = self::nonEmptyLabel($label, 'success-label');
+        $this->componentProps['success_label'] = Input::nonEmptyString($label, 'success-label');
 
         return $this;
     }
@@ -493,7 +422,7 @@ class PullToRefresh extends Element
     /** Override the accessibility announcement for a failed refresh. */
     public function errorLabel(string $label): static
     {
-        $this->componentProps['error_label'] = self::nonEmptyLabel($label, 'error-label');
+        $this->componentProps['error_label'] = Input::nonEmptyString($label, 'error-label');
 
         return $this;
     }

@@ -4,6 +4,7 @@ package dev.momotombo.plugins.nativephp_pull_to_refresh.ui
 internal data class PullToRefreshLifecycleState<T>(
     val localPending: Boolean = false,
     val pendingChildren: List<T>? = null,
+    val pendingRenderSequence: Int? = null,
     val refreshTriggeredForGesture: Boolean = false,
     val visibleResult: String = IDLE,
     val resultCycle: Int = 0,
@@ -14,6 +15,7 @@ internal data class PullToRefreshLifecycleState<T>(
         callbackAvailable: Boolean,
         isRefreshing: Boolean,
         children: List<T>,
+        renderSequence: Int,
     ): PullToRefreshRequest<T> {
         if (!callbackAvailable || isRefreshing || localPending) {
             return PullToRefreshRequest(this, accepted = false)
@@ -23,6 +25,7 @@ internal data class PullToRefreshLifecycleState<T>(
             state = copy(
                 localPending = true,
                 pendingChildren = children.toList(),
+                pendingRenderSequence = renderSequence,
                 visibleResult = IDLE,
                 resultTimeoutGeneration = resultTimeoutGeneration + 1,
             ),
@@ -30,21 +33,28 @@ internal data class PullToRefreshLifecycleState<T>(
         )
     }
 
-    /** Release a request when refreshing, a result, or changed children acknowledge the callback. */
+    /**
+     * Release a request when refreshing, a result, changed children, or a newer
+     * PHP render acknowledges the callback. The render sequence covers callbacks
+     * that change nothing else (no new rows, the same result as last time).
+     */
     fun hostUpdated(
         children: List<T>,
         isRefreshing: Boolean,
         result: String,
+        renderSequence: Int,
     ): PullToRefreshLifecycleState<T> {
         if (!localPending) return this
 
         val childrenChanged = pendingChildren?.let { it != children } == true
-        if (!isRefreshing && result == IDLE && !childrenChanged) return this
+        val rendered = pendingRenderSequence?.let { it != renderSequence } == true
+        if (!isRefreshing && result == IDLE && !childrenChanged && !rendered) return this
 
         return copy(
             localPending = false,
             pendingChildren = null,
-            resultCycle = if (childrenChanged) resultCycle + 1 else resultCycle,
+            pendingRenderSequence = null,
+            resultCycle = if (childrenChanged || rendered) resultCycle + 1 else resultCycle,
             resultTimeoutGeneration = resultTimeoutGeneration + 1,
         )
     }
