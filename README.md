@@ -19,7 +19,7 @@ The consuming app owns data fetching and publishes the `refreshing` and `result`
 Install the stable release from Composer:
 
 ```sh
-composer require momotombo/nativephp-pull-to-refresh:^1.0
+composer require momotombo/nativephp-pull-to-refresh:^1.1
 ```
 
 Register the NativePHP plugin in the consuming app. Publish the NativePHP plugin provider first if the app does not have one yet:
@@ -129,27 +129,44 @@ The same element can be created programmatically when building an EDGE tree in P
 
 ```php
 use Momotombo\NativePhpPullToRefresh\Elements\PullToRefresh;
+use Momotombo\NativePhpPullToRefresh\Elements\PullToRefreshAppearance;
+use Momotombo\NativePhpPullToRefresh\Enums\IndicatorShape;
+use Momotombo\NativePhpPullToRefresh\Enums\Motion;
+use Momotombo\NativePhpPullToRefresh\Enums\Preset;
+use Momotombo\NativePhpPullToRefresh\Enums\ProgressStyle;
 use Native\Mobile\Edge\Elements\Row;
 use Native\Mobile\Edge\Elements\Text;
 
 PullToRefresh::make()
     ->class('w-full flex-1')
-    ->preset('spring')
+    ->preset(Preset::Orbital)
+    ->appearance(
+        PullToRefreshAppearance::make()
+            ->shape(IndicatorShape::Blob)
+            ->progressStyle(ProgressStyle::Arc)
+            ->motion(Motion::Spring)
+    )
     ->refreshing($this->refreshing)
     ->result($this->refreshResult)
     ->onRefresh('refreshFeed')
     ->addChild(Row::make(Text::make('Recent activity')));
 ```
 
+Every option that takes a fixed set of values accepts either the enum case or its string value (`'blob'` and `IndicatorShape::Blob` are equivalent). The enums live in `Momotombo\NativePhpPullToRefresh\Enums`: `Preset`, `IndicatorShape`, `ProgressStyle`, `Motion`, `ProgressMode`, `RefreshResult`, `AndroidIndicatorIcon`, `PhaseName`, and `LayerRole`.
+
 Public builder methods are:
 
-`preset`, `threshold`, `indicatorSize`, `indicatorStrokeWidth`, `animationDuration`, `indicatorIconIos`, `indicatorIconAndroid`, `indicatorAsset`, `indicatorLottie`, `accentColor`, `containerColor`, `trackColor`, `refreshing`, `result`, `resultDuration`, `refreshActionLabel`, `pullLabel`, `releaseLabel`, `refreshingLabel`, `successLabel`, `errorLabel`, and `onRefresh`.
+`preset`, `appearance`, `shape`, `progressStyle`, `motion`, `progressMode`, `indicator`, `threshold`, `indicatorSize`, `indicatorStrokeWidth`, `animationDuration`, `indicatorIconIos`, `indicatorIconAndroid`, `indicatorAsset`, `indicatorLottie`, `accentColor`, `containerColor`, `trackColor`, `refreshing`, `result`, `resultDuration`, `refreshActionLabel`, `pullLabel`, `releaseLabel`, `refreshingLabel`, `successLabel`, `errorLabel`, and `onRefresh`.
 
 ## Options
 
 | Attribute | Default | Description |
 | --- | --- | --- |
-| `preset` | `spring` | `liquid`, `spring`, or `minimal`. |
+| `preset` | `spring` | `spring`, `liquid`, `minimal`, `orbital`, `wave`, or `pulse`. Supplies the default `progress-style` and `motion` (see below). |
+| `shape` | `circle` | `circle`, `capsule`, `rounded`, or `blob`. Radii scale with the container on both platforms; `capsule` widens the container to 1.6× so it reads as a pill. |
+| `progress-style` | From preset | `ring`, `arc` (orbital arc with a satellite), `wave` (liquid fill), `dots` (eight dots), or `none` (glyph only). Used by the built-in indicator. |
+| `motion` | From preset | `none`, `spring` (bouncy), `liquid` (eased), `pulse` (breathes while loading), or `spin` (linear). |
+| `progress-mode` | `scrub` | `scrub` follows the gesture, `indeterminate` loops as soon as the pull starts, `none` draws a full indicator without tracking the gesture. |
 | `threshold` | `88` | Pull distance in points/dp. Android uses it as the activation distance; iOS uses it to scale custom progress while UIKit controls activation. |
 | `indicator-size` | `32` | Indicator diameter in points/dp. |
 | `indicator-stroke-width` | `2.5` | Progress and status mark thickness. |
@@ -167,15 +184,29 @@ Public builder methods are:
 | `indicator-lottie` | — | Relative path under the consuming app's `public/` directory to a Lottie JSON file. |
 | Accessibility labels | English defaults | `refresh-action-label`, `pull-label`, `release-label`, `refreshing-label`, `success-label`, and `error-label`. |
 
+Each preset resolves `progress-style` and `motion` unless you set them yourself; empty Blade bindings also fall back to the preset.
+
+| Preset | `progress-style` | `motion` |
+| --- | --- | --- |
+| `spring` | `ring` | `spring` |
+| `liquid` | `wave` | `liquid` |
+| `minimal` | `ring` (thin) | `spin` |
+| `orbital` | `arc` | `spin` |
+| `wave` | `wave` | `liquid` |
+| `pulse` | `dots` | `pulse` |
+
+A composed `native:pull-to-refresh-indicator` inherits `motion` and `progress-mode` from the container unless it declares its own. While looping, `progress` and `track` layers spin, `artwork` spins with `motion="spin"` and breathes with `motion="pulse"`. Reduced-motion settings and `motion="none"` stop every loop.
+
 Example:
 
 ```blade
 <native:pull-to-refresh
-    preset="liquid"
-    accent-color="#2563EB"
-    indicator-track-color="#BFDBFE"
-    indicator-icon-ios="arrow.clockwise.circle.fill"
-    indicator-icon-android="refresh"
+    preset="orbital"
+    shape="blob"
+    progress-style="arc"
+    motion="spring"
+    accent-color="#7C3AED"
+    container-color="#F5F3FF"
     :refreshing="$refreshing"
     :result="$refreshResult"
     on-refresh="refreshFeed"
@@ -183,6 +214,83 @@ Example:
 >
     <!-- EDGE children -->
 </native:pull-to-refresh>
+```
+
+## Composed indicators in Blade
+
+For a fully custom visual indicator, add exactly one `native:pull-to-refresh-indicator`. It is a declarative sentinel: it is consumed by the parent and never becomes a row in the scrollable content. Its `pulling` phase is required as the base; missing phases reuse that composition.
+
+```blade
+<native:pull-to-refresh threshold="88" on-refresh="refreshFeed" class="w-full flex-1">
+    <native:pull-to-refresh-indicator shape="blob" motion="spring" progress-mode="scrub">
+        <native:pull-to-refresh-phase name="pulling">
+            <native:pull-to-refresh-layer role="background">
+                <native:stack class="items-center justify-center">
+                    <native:image src="refresh/background.svg" />
+                </native:stack>
+            </native:pull-to-refresh-layer>
+            <native:pull-to-refresh-layer role="artwork">
+                <native:image src="refresh/logo.svg" width="42" height="42" />
+            </native:pull-to-refresh-layer>
+            <native:pull-to-refresh-layer role="label">
+                <native:text>Desliza para actualizar</native:text>
+            </native:pull-to-refresh-layer>
+        </native:pull-to-refresh-phase>
+
+        <native:pull-to-refresh-phase name="release">
+            <native:pull-to-refresh-layer role="progress">
+                <native:icon name="arrow-upward" />
+            </native:pull-to-refresh-layer>
+        </native:pull-to-refresh-phase>
+
+        <native:pull-to-refresh-phase name="refreshing">
+            <native:pull-to-refresh-layer role="artwork" lottie="refresh/loading.json" />
+        </native:pull-to-refresh-phase>
+
+        <native:pull-to-refresh-phase name="success">
+            <native:pull-to-refresh-layer role="status">
+                <native:icon name="check-circle" />
+                <native:text>Actualizado</native:text>
+            </native:pull-to-refresh-layer>
+        </native:pull-to-refresh-phase>
+
+        <native:pull-to-refresh-phase name="error">
+            <native:pull-to-refresh-layer role="status">
+                <native:icon name="error" />
+                <native:text>Error al actualizar</native:text>
+            </native:pull-to-refresh-layer>
+        </native:pull-to-refresh-phase>
+    </native:pull-to-refresh-indicator>
+
+    <native:column>
+        <!-- scrollable EDGE content -->
+    </native:column>
+</native:pull-to-refresh>
+```
+
+Available phases are `pulling`, `release`, `refreshing`, `success`, and `error`. Layer roles are `background`, `track`, `progress`, `artwork`, `label`, and `status`; native renderers apply phase-aware opacity, scale, offset, and rotation to those roles. Layers can contain existing visual EDGE components, including `stack`, `row`, `image`, `icon`, `text`, `progress-bar`, and `canvas`.
+
+Do not add a scroll view, another pull-to-refresh, or interactive callbacks inside a layer. The PHP validator rejects those structures. A custom composition replaces only the visual indicator: gesture activation, callbacks, accessibility, reduced-motion behavior, `refreshing`, `result`, and `result-duration` remain owned by the parent container.
+
+The typed API creates the identical EDGE tree:
+
+```php
+use Momotombo\NativePhpPullToRefresh\Elements\PullToRefreshIndicator;
+use Momotombo\NativePhpPullToRefresh\Elements\PullToRefreshLayer;
+use Momotombo\NativePhpPullToRefresh\Elements\PullToRefreshPhase;
+use Native\Mobile\Edge\Elements\Image;
+
+PullToRefresh::make()
+    ->indicator(
+        PullToRefreshIndicator::make()
+            ->phase(
+                PullToRefreshPhase::make('pulling')
+                    ->layer(
+                        PullToRefreshLayer::make('artwork')
+                            ->addChild(Image::make('refresh/logo.svg'))
+                    )
+            )
+    );
 ```
 
 ## Custom artwork
@@ -201,7 +309,7 @@ Put artwork in the consuming app's `public/` directory and pass a relative path:
 </native:pull-to-refresh>
 ```
 
-Supported formats are PNG, SVG, GIF, and Lottie JSON. Use exactly one visual source: the platform icon pair, `indicator-asset`, or `indicator-lottie`. URLs, absolute paths, parent-directory segments (`..`), empty path segments, and unsupported extensions are rejected. The package does not copy application assets; the native renderer resolves them from the consuming app.
+Supported formats are PNG, SVG, GIF, and Lottie JSON. Use exactly one visual source: the platform icon pair, `indicator-asset`, or `indicator-lottie`. A composed layer can instead use its local `asset` or `lottie` attribute. URLs, absolute paths, parent-directory segments (`..`), empty path segments, and unsupported extensions are rejected. The package does not copy application assets; the native renderer resolves them from the consuming app.
 
 ## Layout, accessibility, and platform behavior
 
@@ -224,6 +332,8 @@ composer validate --strict
 composer install
 composer test
 ```
+
+`composer test` also compiles and runs the native refresh-lifecycle checks in `tests/Native`: the Kotlin one needs a JDK and a Kotlin compiler in the Gradle cache (any Android build leaves one), the Swift one needs Xcode. Each is skipped when its toolchain is missing. Run only the PHP tests with `vendor/bin/pest --exclude-group=native`.
 
 From a NativePHP host app:
 

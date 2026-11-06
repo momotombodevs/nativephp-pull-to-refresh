@@ -13,7 +13,10 @@ Use the native component as the vertical scroll container for EDGE children. Kee
 @verbatim
 <code-snippet name="Pull-to-refresh EDGE container" lang="blade">
 <native:pull-to-refresh
-    preset="spring"
+    preset="orbital"
+    shape="blob"
+    progress-style="arc"
+    motion="spring"
     threshold="88"
     indicator-size="32"
     indicator-stroke-width="2.5"
@@ -39,7 +42,7 @@ Use the native component as the vertical scroll container for EDGE children. Kee
 
 ### Props
 
-`preset` accepts `liquid`, `spring`, or `minimal` (default `spring`). `threshold` (default `88`) and `indicator-size` (default `32`) must be greater than zero. `accent-color` and `container-color` default to the app theme. `refreshing` defaults to `false`; `result` accepts `idle`, `success`, or `error` (default `idle`); `result-duration` defaults to `500` milliseconds. `on-refresh` names a method on the parent Native Component.
+`preset` accepts `spring`, `liquid`, `minimal`, `orbital`, `wave`, or `pulse` (default `spring`). `shape` accepts `circle`, `capsule`, `rounded`, or `blob`; `progress-style` accepts `ring`, `arc`, `wave`, `dots`, or `none`; `motion` accepts `none`, `spring`, `liquid`, `pulse`, or `spin`; `progress-mode` accepts `scrub`, `indeterminate`, or `none`. Each preset supplies default `progress-style` and `motion` values (spring: ring/spring, liquid: wave/liquid, minimal: ring/spin, orbital: arc/spin, wave: wave/liquid, pulse: dots/pulse); set them explicitly to override. `threshold` (default `88`) and `indicator-size` (default `32`) must be greater than zero. `accent-color` and `container-color` default to the app theme. `refreshing` defaults to `false`; `result` accepts `idle`, `success`, or `error` (default `idle`); `result-duration` defaults to `500` milliseconds. `on-refresh` names a method on the parent Native Component.
 
 `indicator-stroke-width` (default `2.5`) controls the progress and status-mark thickness in points/dp. `animation-duration` (default `240`) controls native transitions and the native loading ring; `0` disables those transitions, while Lottie keeps its authored playback timing. `indicator-track-color` controls the inactive arc and defaults to the theme outline variant. `refresh-action-label`, `pull-label`, `release-label`, `refreshing-label`, `success-label`, and `error-label` customize localized accessibility action/state labels. Native icons may be set together for iOS and Android; choose either that icon pair, one `indicator-asset`, or one `indicator-lottie` source.
 
@@ -47,6 +50,8 @@ Use the native component as the vertical scroll container for EDGE children. Kee
 
 The component owns one vertical scroll container, retains its EDGE children, and delegates feed loading to the parent method. Keep each refresh idempotent at the application layer and publish `refreshing` and `result` back to the component. No permissions or secrets are required. Image and Lottie paths are relative to the consuming app's `public/` directory; remote URLs and parent-directory traversal are rejected.
 
-The PHP `PullToRefresh` builder exposes `make`, `preset`, `threshold`, `indicatorSize`, `indicatorStrokeWidth`, `animationDuration`, `indicatorIconIos`, `indicatorIconAndroid`, `indicatorAsset`, `indicatorLottie`, `accentColor`, `containerColor`, `trackColor`, `refreshing`, `result`, `resultDuration`, `refreshActionLabel`, `pullLabel`, `releaseLabel`, `refreshingLabel`, `successLabel`, `errorLabel`, and `onRefresh`. Add regular NativePHP EDGE children with `addChild`.
+For a custom visual indicator, nest one `native:pull-to-refresh-indicator` inside the container. It contains named `native:pull-to-refresh-phase` nodes (`pulling`, `release`, `refreshing`, `success`, `error`) and `native:pull-to-refresh-layer` nodes with roles `background`, `track`, `progress`, `artwork`, `label`, or `status`. The `pulling` phase is the fallback for omitted phases. Layers accept visual EDGE children but cannot contain scroll views, another pull-to-refresh, or interactive callbacks.
+
+The PHP `PullToRefresh` builder exposes `make`, `preset`, `appearance`, `shape`, `progressStyle`, `motion`, `progressMode`, `indicator`, `threshold`, `indicatorSize`, `indicatorStrokeWidth`, `animationDuration`, `indicatorIconIos`, `indicatorIconAndroid`, `indicatorAsset`, `indicatorLottie`, `accentColor`, `containerColor`, `trackColor`, `refreshing`, `result`, `resultDuration`, `refreshActionLabel`, `pullLabel`, `releaseLabel`, `refreshingLabel`, `successLabel`, `errorLabel`, and `onRefresh`. Build the same tree with `PullToRefreshIndicator`, `PullToRefreshPhase`, and `PullToRefreshLayer`.
 
 The iOS renderer uses a UIKit table view with `UIRefreshControl`, so direct EDGE children are virtualized native rows. UIKit controls the activation distance and physical drag resistance; `threshold` normalizes custom visual progress there. Android uses Material 3 nested scrolling and applies `threshold` to activation. Rebuild each native platform after changing plugin renderers or manifest dependencies.
