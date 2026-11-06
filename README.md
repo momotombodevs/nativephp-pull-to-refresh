@@ -163,12 +163,12 @@ Public builder methods are:
 | Attribute | Default | Description |
 | --- | --- | --- |
 | `preset` | `spring` | `spring`, `liquid`, `minimal`, `orbital`, `wave`, or `pulse`. Supplies the default `progress-style` and `motion` (see below). |
-| `shape` | `circle` | `circle`, `capsule`, `rounded`, or `blob`. Radii scale with the container on both platforms; `capsule` widens the container to 1.6× so it reads as a pill. |
+| `shape` | `circle` | `circle`, `capsule`, `rounded`, or `blob`. Radii scale with the container on both platforms; `capsule` makes the container 1.6× wider than tall so it reads as a pill. |
 | `progress-style` | From preset | `ring`, `arc` (orbital arc with a satellite), `wave` (liquid fill), `dots` (eight dots), or `none` (glyph only). Used by the built-in indicator. |
 | `motion` | From preset | `none`, `spring` (bouncy), `liquid` (eased), `pulse` (breathes while loading), or `spin` (linear). |
 | `progress-mode` | `scrub` | `scrub` follows the gesture, `indeterminate` loops as soon as the pull starts, `none` draws a full indicator without tracking the gesture. |
 | `threshold` | `88` | Pull distance in points/dp. Android uses it as the activation distance; iOS uses it to scale custom progress while UIKit controls activation. |
-| `indicator-size` | `32` | Indicator diameter in points/dp. |
+| `indicator-size` | `32` | Indicator diameter in points/dp. The container around it is `indicator-size + 20` on iOS and `max(40, indicator-size + 8)` on Android, where Material's default box is 40dp. |
 | `indicator-stroke-width` | `2.5` | Progress and status mark thickness. |
 | `animation-duration` | `240` | Native transition duration in milliseconds. `0` disables non-essential motion. |
 | `accent-color` | Theme accent | Progress, glyph, and artwork color. Accepts a color string or ARGB integer. |
@@ -195,7 +195,7 @@ Each preset resolves `progress-style` and `motion` unless you set them yourself;
 | `wave` | `wave` | `liquid` |
 | `pulse` | `dots` | `pulse` |
 
-A composed `native:pull-to-refresh-indicator` inherits `motion` and `progress-mode` from the container unless it declares its own. While looping, `progress` and `track` layers spin, `artwork` spins with `motion="spin"` and breathes with `motion="pulse"`. Reduced-motion settings and `motion="none"` stop every loop.
+A composed `native:pull-to-refresh-indicator` inherits `motion` and `progress-mode` from the container unless it declares its own. While looping, `progress` and `track` layers spin, `artwork` spins with `motion="spin"` and breathes with `motion="pulse"`. Reduced-motion settings and `motion="none"` stop every loop, including Lottie and GIF playback, which then show a still frame.
 
 Example:
 
@@ -218,7 +218,7 @@ Example:
 
 ## Composed indicators in Blade
 
-For a fully custom visual indicator, add exactly one `native:pull-to-refresh-indicator`. It is a declarative sentinel: it is consumed by the parent and never becomes a row in the scrollable content. Its `pulling` phase is required as the base; missing phases reuse that composition.
+For a fully custom visual indicator, add exactly one `native:pull-to-refresh-indicator`. It is a declarative sentinel: it is consumed by the parent and never becomes a row in the scrollable content. Its `pulling` phase is required as the base (the element throws without one); missing phases reuse that composition.
 
 ```blade
 <native:pull-to-refresh threshold="88" on-refresh="refreshFeed" class="w-full flex-1">
@@ -268,7 +268,7 @@ For a fully custom visual indicator, add exactly one `native:pull-to-refresh-ind
 </native:pull-to-refresh>
 ```
 
-Available phases are `pulling`, `release`, `refreshing`, `success`, and `error`. Layer roles are `background`, `track`, `progress`, `artwork`, `label`, and `status`; native renderers apply phase-aware opacity, scale, offset, and rotation to those roles. Layers can contain existing visual EDGE components, including `stack`, `row`, `image`, `icon`, `text`, `progress-bar`, and `canvas`.
+Available phases are `pulling`, `release`, `refreshing`, `success`, and `error`. Layer roles are `background`, `track`, `progress`, `artwork`, `label`, and `status`; the active phase decides which layers draw, and each role reacts to progress and motion: `background` grows with the pull, `progress` turns with it (or spins while looping), `track` spins while looping, `artwork` follows the motion (spring/liquid scale, spin, pulse), `label` stays hidden until the pull starts, and `status` draws as-is for `success`/`error` phases. Layers can contain existing visual EDGE components, including `stack`, `row`, `image`, `icon`, `text`, `progress-bar`, and `canvas`.
 
 Do not add a scroll view, another pull-to-refresh, or interactive callbacks inside a layer. The PHP validator rejects those structures. A custom composition replaces only the visual indicator: gesture activation, callbacks, accessibility, reduced-motion behavior, `refreshing`, `result`, and `result-duration` remain owned by the parent container.
 
@@ -322,6 +322,9 @@ Supported formats are PNG, SVG, GIF, and Lottie JSON. Use exactly one visual sou
 - Native dependencies are declared in [nativephp.json](nativephp.json). The host app must be rebuilt after changing that manifest or either native renderer.
 
 If the screen already has a vertical list or scroll view, use that screen's existing refresh mechanism instead of nesting it inside this component.
+
+
+A refresh whose callback changes nothing still completes: NativePHP skips publishing identical frames, so the element serializes a `render_sequence` that advances on every render and the renderers treat a newer render as the callback's answer. Two consequences: screens using this component always publish at least one changed node per render, and any unrelated render of the same screen that lands while a refresh is pending also completes it. Keep refresh handlers idempotent (for example, return early while `$this->refreshing` is true).
 
 ## Validation and development commands
 
