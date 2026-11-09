@@ -6,6 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-11-09
+
+### Fixed
+
+- iOS swaps the success/error badge instantly with an opaque mark, as Android does, instead of cross-fading it into the glyph (for example Wave's liquid fill).
+- iOS keeps the result badge while the indicator retracts after `result-duration`, instead of reverting to the empty pull glyph on the way out.
+- iOS composed indicators center wrap-sized layer children and rotate them in place instead of pinning them to the top-leading corner.
+- iOS composed indicators swap phases without a cross-fade, and new layers follow the container's offset animation instead of appearing at its final position.
+
 ## [1.1.1] - 2026-11-06
 
 ### Changed
@@ -79,7 +88,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Package test suite passing with 13 tests and 191 assertions.
 - NativePHP plugin manifest validated without errors; the validator may report the expected informational warning that this visual-only plugin defines no `bridge_functions`.
 
-[Unreleased]: https://github.com/momotombodevs/nativephp-pull-to-refresh/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/momotombodevs/nativephp-pull-to-refresh/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/momotombodevs/nativephp-pull-to-refresh/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/momotombodevs/nativephp-pull-to-refresh/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/momotombodevs/nativephp-pull-to-refresh/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/momotombodevs/nativephp-pull-to-refresh/releases/tag/v1.0.0
