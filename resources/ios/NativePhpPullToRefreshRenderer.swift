@@ -129,6 +129,14 @@ struct NativePhpPullToRefreshRenderer: View {
         result == "idle" || result == expiredResult ? "idle" : result
     }
 
+    /// Result the indicator draws. When a result expires the indicator retracts; it keeps
+    /// the expired badge while it leaves instead of reverting to the empty pull glyph.
+    private var indicatorResult: String {
+        if visibleResult != "idle" { return visibleResult }
+        guard !isInteractionLocked, pullDistance == 0, result == "success" || result == "error" else { return "idle" }
+        return result
+    }
+
     private var isInteractionLocked: Bool {
         isRefreshing || refreshPending
     }
@@ -191,13 +199,17 @@ struct NativePhpPullToRefreshRenderer: View {
                         indicator: customIndicator,
                         progress: indicatorProgress,
                         isRefreshing: isRefreshing || refreshPending,
-                        result: visibleResult,
+                        result: indicatorResult,
                         motion: indicatorMotion,
                         progressMode: indicatorProgressMode,
                         animationDuration: animationDuration,
                         reduceMotion: reduceMotion
                     )
                     .frame(width: indicatorSize, height: indicatorSize)
+                    // Layers are inserted when the phase changes, often while the container's
+                    // offset is still animating. Grouping makes them ride that animation instead
+                    // of appearing at the container's final position.
+                    .geometryGroup()
                 } else {
                     PullToRefreshIndicator(
                         preset: preset,
@@ -206,7 +218,7 @@ struct NativePhpPullToRefreshRenderer: View {
                         progressMode: indicatorProgressMode,
                         progress: indicatorProgress,
                         isRefreshing: isRefreshing || refreshPending,
-                        result: visibleResult,
+                        result: indicatorResult,
                         size: indicatorSize,
                         strokeWidth: indicatorStrokeWidth,
                         animationDuration: animationDuration,
@@ -595,20 +607,41 @@ private struct PullToRefreshIndicator: View {
         .frame(width: size, height: size)
     }
 
-    /// Select result, Lottie, platform icon, asset, or built-in preset in a stable priority order.
-    @ViewBuilder
+    /// Glyph with the result badge stacked above it. The swap is instant, as on Android:
+    /// a cross-fade blends the glyph (e.g. the liquid fill) into the badge, and short
+    /// result durations end before the badge is fully opaque.
     private func indicator(rotation: Double, showsSystemIcon: Bool) -> some View {
-        if result == "success" {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: size * 0.76, weight: .semibold))
-                .foregroundStyle(successColor)
-                .accessibilityHidden(true)
-        } else if result == "error" {
-            Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: size * 0.76, weight: .semibold))
-                .foregroundStyle(errorColor)
-                .accessibilityHidden(true)
-        } else if let lottiePath {
+        let badge = resultBadge
+
+        return ZStack {
+            glyph(rotation: rotation, showsSystemIcon: showsSystemIcon)
+                .opacity(badge == nil ? 1 : 0)
+                .animation(nil, value: badge == nil)
+            if let badge {
+                // Palette rendering fills the symbol's cut-out mark, so nothing shows through it.
+                Image(systemName: badge.symbol)
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, badge.color)
+                    .font(.system(size: size * 0.76, weight: .semibold))
+                    .zIndex(1)
+                    .transition(.identity)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    private var resultBadge: (symbol: String, color: Color)? {
+        switch result {
+        case "success": return ("checkmark.circle.fill", successColor)
+        case "error": return ("exclamationmark.circle.fill", errorColor)
+        default: return nil
+        }
+    }
+
+    /// Select Lottie, platform icon, asset, or built-in preset in a stable priority order.
+    @ViewBuilder
+    private func glyph(rotation: Double, showsSystemIcon: Bool) -> some View {
+        if let lottiePath {
             PullToRefreshLottie(path: lottiePath, progress: visualProgress, isRefreshing: isRefreshing, reduceMotion: stillMedia) {
                 presetGlyph(rotation: rotation)
             }
@@ -868,10 +901,18 @@ private struct PullToRefreshComposedIndicator: View {
                         motion: motion,
                         reduceMotion: reduceMotion
                     )
+                    // Phases swap instantly, as on Android; a cross-fade would stack
+                    // layers from several phases while the gesture moves quickly.
+                    .transition(.identity)
                 }
             }
         }
     }
+}
+
+/// Whether an EDGE node stretches along an axis (`w-full`, `h-1/2`, …) rather than wrapping its content.
+private func pullToRefreshFillsAxis(_ mode: Int?) -> Bool {
+    mode == SizeMode.fill || mode == SizeMode.percent
 }
 
 private struct PullToRefreshComposedLayer: View {
@@ -926,8 +967,17 @@ private struct PullToRefreshComposedLayer: View {
             // Equatable lets SwiftUI skip unchanged EDGE subtrees on every animation tick.
             ForEach(layer.children, id: \.id) { child in
                 NodeView(node: child).equatable()
+                    // EDGE frames are unbounded and top-leading by default, which would pin
+                    // an icon to the corner and make rotation orbit it. Wrap-sized children
+                    // take their ideal size so the layer centers them; `w-full`/`h-full` still fill.
+                    .fixedSize(
+                        horizontal: !pullToRefreshFillsAxis(child.layout?.widthMode),
+                        vertical: !pullToRefreshFillsAxis(child.layout?.heightMode)
+                    )
             }
         }
+        // Fill the indicator so rotation and scale pivot on its center, matching Android's centered Box.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .opacity(role == "label" && progress == 0 && !isRefreshing ? 0 : 1)
         .scaleEffect(scale)
         .rotationEffect(.degrees(rotation))
